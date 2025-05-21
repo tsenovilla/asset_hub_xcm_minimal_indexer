@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 clap = "4.5.38"
+serde = "1.0.219"
 subxt = {version = "0.42.1", features=["jsonrpsee"]}
 thiserror = "2.0.12"
 tokio = { version = "1.45.0", features=["full"]}

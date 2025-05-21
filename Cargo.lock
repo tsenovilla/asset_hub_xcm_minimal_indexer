@@ -3451,6 +3451,7 @@ name = "xcm_minimal_indexer"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "serde",
  "subxt",
  "thiserror 2.0.12",
  "tokio",
