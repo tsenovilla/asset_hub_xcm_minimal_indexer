@@ -7,6 +7,7 @@ pub mod asset_hub {}
 pub(crate) mod error;
 pub(crate) mod helpers;
 pub(crate) mod incoming_parser;
+pub(crate) mod outgoing_parser;
 pub(crate) mod types;
 
 #[tokio::main]

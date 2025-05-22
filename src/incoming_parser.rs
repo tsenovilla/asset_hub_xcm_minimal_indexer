@@ -1,7 +1,7 @@
 use crate::{
 	Error,
 	helpers::XcmAggregatedOrigin,
-	types::{BlockHash, BlockNumber},
+	types::{BlockHash, BlockNumber, TransferType},
 };
 use serde::{Serialize, Serializer};
 use subxt::{
@@ -50,12 +50,6 @@ impl PartialEq for OriginChain {
 			_ => false,
 		}
 	}
-}
-
-#[derive(Debug, Serialize, PartialEq)]
-pub(crate) enum TransferType {
-	Teleport,
-	Reserve,
 }
 
 pub(crate) async fn get_incoming_xcm_transfers_at_block_hash(
@@ -229,6 +223,8 @@ mod tests {
 		let api = OnlineClient::<PolkadotConfig>::from_url(crate::ASSET_HUB_RPC_ENDPOINT)
 			.await
 			.unwrap();
+
+    // Hydration ordered a transfer of USDT
 		let block_hash_hex = "0xdbbed8c97746c5fc0fc13e30aaf12cbbe329ecb4198ed0c0e62a32421016c11a";
 		let block_hash: BlockHash = block_hash_hex.parse().unwrap();
 		let xcm_transfer =
@@ -241,6 +237,41 @@ mod tests {
 				receiver: "148nLno8sWcZWVxXJjftB7Lbr6NmbhWPUZMCWQNcwnsGgyeb".to_owned(),
 				asset: "Tether USD".to_owned(),
 				amount: 869_282_849,
+				transfer_type: TransferType::Reserve
+			}]
+		);
+
+    // Moonbeam ordered a transfer of USD Coin 
+    let block_hash_hex = "0x5e45bdca2951ac156e0459a461de60a1ee0a4263b17d7d6a95e4f28b9955c16b";
+		let block_hash: BlockHash = block_hash_hex.parse().unwrap();
+		let xcm_transfer =
+			get_incoming_xcm_transfers_at_block_hash(&api, block_hash).await.unwrap();
+		assert_eq!(
+			xcm_transfer,
+			vec![XcmIncomingTransfer {
+				block_number: 8_898_884,
+				origin_chain: OriginChain(XcmAggregatedOrigin::Sibling(Id(2004))),
+				receiver: "13KsaHFcQKSTd4m73Ub9yVwM1JGCZvipMyTZonHEXEceFYwS".to_owned(),
+				asset: "USD Coin".to_owned(),
+				amount: 9_401_612_723,
+				transfer_type: TransferType::Reserve
+			}]
+		);
+
+
+    // BridgeHub ordered a transfer of WETH
+    let block_hash_hex = "0x4bd6df2a92068d2cca88057e3263add68626bb563a8ff5c3435ad5478e6cc0e3";
+		let block_hash: BlockHash = block_hash_hex.parse().unwrap();
+		let xcm_transfer =
+			get_incoming_xcm_transfers_at_block_hash(&api, block_hash).await.unwrap();
+		assert_eq!(
+			xcm_transfer,
+			vec![XcmIncomingTransfer {
+				block_number: 8_898_898,
+				origin_chain: OriginChain(XcmAggregatedOrigin::Sibling(Id(1002))),
+				receiver: "12aoZXwbUzsv3z5HF5HCrtEwBJYCeKne6rYsxFEKDZ86Wdv8".to_owned(),
+				asset: "Wrapped Ether".to_owned(),
+				amount: 100_000_000_000_000,
 				transfer_type: TransferType::Reserve
 			}]
 		);
