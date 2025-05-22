@@ -1,6 +1,7 @@
 use crate::{
 	Error,
-	helpers::{self, XcmAggregatedOrigin},
+	helpers::XcmAggregatedOrigin,
+	types::{BlockHash, BlockNumber},
 };
 use serde::{Serialize, Serializer};
 use subxt::{
@@ -9,12 +10,6 @@ use subxt::{
 	events::{EventDetails, Phase},
 	storage::Storage,
 };
-
-type BlockHash =
-	<<PolkadotConfig as subxt::config::Config>::Hasher as subxt::config::Hasher>::Output;
-
-type BlockNumber =
-	<<PolkadotConfig as subxt::config::Config>::Header as subxt::config::Header>::Number;
 
 #[derive(Debug, Serialize, PartialEq)]
 pub(crate) struct XcmIncomingTransfer {
@@ -76,30 +71,36 @@ pub(crate) async fn get_incoming_xcm_transfers_at_block_hash(
 	let mut output = Vec::new();
 	let mut last_issuance_event = None;
 
-  let mut events_from_last_issuance_event_to_message_processed_event = 0;
+	let mut events_from_last_issuance_event_to_message_processed_event = 0;
 
 	for event in events {
 		// Don't block the indexer if the event is an error.
 		if let Ok(event) = event {
 			match (event.phase(), event.pallet_name(), event.variant_name()) {
 				(Phase::Finalization, "Assets", "Issued") |
-				(Phase::Finalization, "ForeignAssets", "Issued") => { last_issuance_event = Some(event); events_from_last_issuance_event_to_message_processed_event = 0;},
-				(Phase::Finalization, "Balances", "Minted") => {last_issuance_event = Some(event); events_from_last_issuance_event_to_message_processed_event =0;},
+				(Phase::Finalization, "ForeignAssets", "Issued") => {
+					last_issuance_event = Some(event);
+					events_from_last_issuance_event_to_message_processed_event = 0;
+				},
+				(Phase::Finalization, "Balances", "Minted") => {
+					last_issuance_event = Some(event);
+					events_from_last_issuance_event_to_message_processed_event = 0;
+				},
 				(Phase::Finalization, "MessageQueue", "Processed") => {
 					if let Ok(payload) = generate_xcm_received_payload(
 						&storage,
 						block_number,
 						last_issuance_event.take(),
 						event,
-            events_from_last_issuance_event_to_message_processed_event
+						events_from_last_issuance_event_to_message_processed_event,
 					)
 					.await
 					{
 						output.push(payload);
 					}
-           events_from_last_issuance_event_to_message_processed_event += 1; 
+					events_from_last_issuance_event_to_message_processed_event += 1;
 				},
-				_ => events_from_last_issuance_event_to_message_processed_event +=1,
+				_ => events_from_last_issuance_event_to_message_processed_event += 1,
 			}
 		}
 	}
@@ -112,7 +113,7 @@ async fn generate_xcm_received_payload(
 	block_number: BlockNumber,
 	last_issuance_event: Option<EventDetails<PolkadotConfig>>,
 	processed_message_event: EventDetails<PolkadotConfig>,
-  events_from_last_issuance_event_to_message_processed_event: u32
+	events_from_last_issuance_event_to_message_processed_event: u32,
 ) -> Result<XcmIncomingTransfer, Error> {
 	let processed_message_event_decoded = processed_message_event
 		.as_event::<crate::asset_hub::message_queue::events::Processed>()?
@@ -127,15 +128,15 @@ async fn generate_xcm_received_payload(
 	// Extract xcm origin from the message_queue event
 	let message_origin = processed_message_event_decoded.origin;
 
-    // Extract all relevant info from issuance_event.
-    // When an Xcm transfer happen, two events are emitted after minting the assets to the receiver
-    // before the message processed event is emitted: the first one notifies that some balance was issued to
-    // pay fees, the second one notifies that the fees where paid. If this structure isn't
-    // followed, we cannot ensure that the xcm message is actually a transfer => hence the purpose
-    // of the event counter.
+	// Extract all relevant info from issuance_event.
+	// When an Xcm transfer happen, two events are emitted after minting the assets to the receiver
+	// before the message processed event is emitted: the first one notifies that some balance was
+	// issued to pay fees, the second one notifies that the fees where paid. If this structure
+	// isn't followed, we cannot ensure that the xcm message is actually a transfer => hence the
+	// purpose of the event counter.
 	let (asset, amount, receiver, transfer_type) = match (
 		&message_origin,
-    events_from_last_issuance_event_to_message_processed_event,
+		events_from_last_issuance_event_to_message_processed_event,
 		last_issuance_event.as_ref().map(|event| {
 			event.as_event::<crate::asset_hub::balances::events::Minted>().ok().flatten()
 		}),
@@ -149,10 +150,10 @@ async fn generate_xcm_received_payload(
 				.flatten()
 		}),
 	) {
-		(XcmAggregatedOrigin::Parent,2, Some(Some(minted_event)), Some(None), Some(None)) => (
+		(XcmAggregatedOrigin::Parent, 2, Some(Some(minted_event)), Some(None), Some(None)) => (
 			"DOT".to_owned(),
 			minted_event.amount,
-			helpers::convert_account_id_to_ah_address(&minted_event.who),
+			crate::helpers::convert_account_id_to_ah_address(&minted_event.who),
 			TransferType::Teleport,
 		),
 		(XcmAggregatedOrigin::Sibling(_), 2, Some(None), Some(Some(issue_event)), Some(None)) => {
@@ -167,7 +168,7 @@ async fn generate_xcm_received_payload(
 			(
 				asset,
 				issue_event.amount,
-				helpers::convert_account_id_to_ah_address(&issue_event.owner),
+				crate::helpers::convert_account_id_to_ah_address(&issue_event.owner),
 				TransferType::Reserve,
 			)
 		},
@@ -188,7 +189,7 @@ async fn generate_xcm_received_payload(
 			// may configure a runtime trusting AH as reserve for a teleportable asset, but this is
 			// pretty unlikely as there's not any advantage/attack opportunity by doing so. So while
 			// theoretically possible, let's discard this option for simplicity of the indexer).
-			let transfer_type = if helpers::is_sibling_concrete_asset_for_message_origin(
+			let transfer_type = if crate::helpers::is_sibling_concrete_asset_for_message_origin(
 				&message_origin,
 				&asset_id,
 			) {
@@ -199,7 +200,7 @@ async fn generate_xcm_received_payload(
 			(
 				asset,
 				issue_event.amount,
-				helpers::convert_account_id_to_ah_address(&issue_event.owner),
+				crate::helpers::convert_account_id_to_ah_address(&issue_event.owner),
 				transfer_type,
 			)
 		},
