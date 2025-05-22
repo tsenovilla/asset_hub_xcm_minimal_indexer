@@ -17,7 +17,7 @@ type BlockNumber =
 	<<PolkadotConfig as subxt::config::Config>::Header as subxt::config::Header>::Number;
 
 #[derive(Debug, Serialize, PartialEq)]
-pub(crate) struct XcmTransfer {
+pub(crate) struct XcmIncomingTransfer {
 	// This is currently u32, but better not assume it
 	block_number: BlockNumber,
 	origin_chain: OriginChain,
@@ -66,7 +66,7 @@ pub(crate) enum TransferType {
 pub(crate) async fn get_incoming_xcm_transfers_at_block_hash(
 	api: &OnlineClient<PolkadotConfig>,
 	block_hash: BlockHash,
-) -> Result<Vec<XcmTransfer>, Error> {
+) -> Result<Vec<XcmIncomingTransfer>, Error> {
 	let block = api.blocks().at(BlockRef::from_hash(block_hash)).await?;
 
 	let block_number = block.number();
@@ -113,7 +113,7 @@ async fn generate_xcm_received_payload(
 	last_issuance_event: Option<EventDetails<PolkadotConfig>>,
 	processed_message_event: EventDetails<PolkadotConfig>,
   events_from_last_issuance_event_to_message_processed_event: u32
-) -> Result<XcmTransfer, Error> {
+) -> Result<XcmIncomingTransfer, Error> {
 	let processed_message_event_decoded = processed_message_event
 		.as_event::<crate::asset_hub::message_queue::events::Processed>()?
 		.expect(
@@ -207,7 +207,7 @@ async fn generate_xcm_received_payload(
 		_ => return Err(Error::GeneratePayloadFailed),
 	};
 
-	Ok(XcmTransfer {
+	Ok(XcmIncomingTransfer {
 		block_number,
 		origin_chain: OriginChain(message_origin),
 		receiver,
@@ -234,7 +234,7 @@ mod tests {
 			get_incoming_xcm_transfers_at_block_hash(&api, block_hash).await.unwrap();
 		assert_eq!(
 			xcm_transfer,
-			vec![XcmTransfer {
+			vec![XcmIncomingTransfer {
 				block_number: 8_886_424,
 				origin_chain: OriginChain(XcmAggregatedOrigin::Sibling(Id(2034))),
 				receiver: "148nLno8sWcZWVxXJjftB7Lbr6NmbhWPUZMCWQNcwnsGgyeb".to_owned(),
