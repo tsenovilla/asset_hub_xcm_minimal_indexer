@@ -1,15 +1,18 @@
 use crate::{
 	Error,
-	asset_hub::{
-		runtime_apis::location_to_account_api::types::convert_location::Location,
-		runtime_types::staging_xcm::v4::{
-			junction::Junction, junctions::Junctions, location::Location as LocationV4,
-		},
+	asset_hub::runtime_types::staging_xcm::v4::{
+		junction::Junction, junctions::Junctions, location::Location,
 	},
+};
+use sp_core::{
+	crypto::{Ss58AddressFormat, Ss58Codec},
+	sr25519::Public as Sr25519Public,
 };
 use subxt::{
 	Metadata, OnlineClient, PolkadotConfig, config::polkadot::AccountId32, runtime_api::RuntimeApi,
 };
+
+pub(crate) type XcmAggregatedOrigin = crate::asset_hub::message_queue::events::processed::Origin;
 
 pub(crate) fn validate_ah_metadata(metadata: &Metadata) -> Result<(), Error> {
 	if !crate::asset_hub::is_codegen_valid_for(metadata) {
@@ -18,32 +21,50 @@ pub(crate) fn validate_ah_metadata(metadata: &Metadata) -> Result<(), Error> {
 	Ok(())
 }
 
-pub(crate) async fn sibling_sovereign_account(
-	para_id: u32,
-	runtime_api: RuntimeApi<PolkadotConfig, OnlineClient<PolkadotConfig>>,
-) -> Result<AccountId32, Error> {
-	let location_to_account_api = crate::asset_hub::apis().location_to_account_api();
-	let location = Location::V4(LocationV4 {
-		parents: 1,
-		interior: Junctions::X1([Junction::Parachain(para_id)]),
-	});
-	let payload = location_to_account_api.convert_location(location);
-	runtime_api.call(payload).await?.map_err(|_| Error::XcmRuntimeApi)
+pub(crate) fn is_sibling_concrete_asset_for_message_origin(
+	origin: &XcmAggregatedOrigin,
+	asset_id: &Location,
+) -> bool {
+	fn junction_starts_with_para_id(para_id: u32, junction: &Junction) -> bool {
+		matches!(junction, Junction::Parachain(id) if *id==para_id)
+	}
+
+	if let XcmAggregatedOrigin::Sibling(para_id) = origin {
+		let para_id = para_id.0;
+		match (asset_id.parents, &asset_id.interior) {
+			(1, Junctions::X1(interior)) => junction_starts_with_para_id(para_id, &interior[0]),
+			(1, Junctions::X2(interior)) => junction_starts_with_para_id(para_id, &interior[0]),
+			(1, Junctions::X3(interior)) => junction_starts_with_para_id(para_id, &interior[0]),
+			(1, Junctions::X4(interior)) => junction_starts_with_para_id(para_id, &interior[0]),
+			(1, Junctions::X5(interior)) => junction_starts_with_para_id(para_id, &interior[0]),
+			(1, Junctions::X6(interior)) => junction_starts_with_para_id(para_id, &interior[0]),
+			(1, Junctions::X7(interior)) => junction_starts_with_para_id(para_id, &interior[0]),
+			(1, Junctions::X8(interior)) => junction_starts_with_para_id(para_id, &interior[0]),
+			_ => false,
+		}
+	} else {
+		false
+	}
+}
+
+pub(crate) fn convert_account_id_to_ah_address(account_id: &AccountId32) -> String {
+	Sr25519Public::from_raw(account_id.0).to_ss58check_with_version(Ss58AddressFormat::custom(0))
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::asset_hub::runtime_types::polkadot_parachain_primitives::primitives::Id;
 	use std::str::FromStr;
 	use subxt::{OnlineClient, PolkadotConfig};
 
-	const ASSET_HUB_RPC_ENDPOINT: &str = "wss://polkadot-asset-hub-rpc.polkadot.io";
 	const POLKADOT_RPC_ENDPOINT: &str = "wss://polkadot-rpc.dwellir.com";
-	const HYDRATION_PARA_ID: u32 = 2034;
 
 	#[tokio::test]
 	async fn validate_ah_metadata_with_ah_node() {
-		let api = OnlineClient::<PolkadotConfig>::from_url(ASSET_HUB_RPC_ENDPOINT).await.unwrap();
+		let api = OnlineClient::<PolkadotConfig>::from_url(crate::ASSET_HUB_RPC_ENDPOINT)
+			.await
+			.unwrap();
 		let metadata = api.metadata();
 		assert!(validate_ah_metadata(&metadata).is_ok());
 	}
@@ -55,15 +76,38 @@ mod tests {
 		assert!(matches!(validate_ah_metadata(&metadata).err(), Some(Error::InvalidMetadata)));
 	}
 
-	#[tokio::test]
-	async fn sibling_sovereign_account_hydration() {
-		let api = OnlineClient::<PolkadotConfig>::from_url(ASSET_HUB_RPC_ENDPOINT).await.unwrap();
-		let runtime_api = api.runtime_api().at_latest().await.unwrap();
-		let expected_hydration_sovereign_account =
-			AccountId32::from_str("13cKp89Uh2yWgTG28JA1QEvPUMjEPKejqkjHKf9zqLiFKjH6").unwrap();
-		assert_eq!(
-			expected_hydration_sovereign_account,
-			sibling_sovereign_account(HYDRATION_PARA_ID, runtime_api).await.unwrap()
-		);
+	#[test]
+	fn is_sibling_concrete_asset_for_message_origin_asset_test() {
+		let asset_id = Location {
+			parents: 1,
+			interior: Junctions::X3([
+				Junction::Parachain(2004),
+				Junction::PalletInstance(50),
+				Junction::GeneralIndex(3014),
+			]),
+		};
+		assert!(is_sibling_concrete_asset_for_message_origin(
+			&XcmAggregatedOrigin::Sibling(Id(2004)),
+			&asset_id
+		));
+		assert!(!is_sibling_concrete_asset_for_message_origin(
+			&XcmAggregatedOrigin::Sibling(Id(3370)),
+			&asset_id
+		));
+		assert!(!is_sibling_concrete_asset_for_message_origin(
+			&XcmAggregatedOrigin::Parent,
+			&asset_id
+		));
+		assert!(!is_sibling_concrete_asset_for_message_origin(
+			&XcmAggregatedOrigin::Here,
+			&asset_id
+		));
+	}
+
+	#[test]
+	fn convert_account_id_to_ah_address_test() {
+		let address = "15oF4uVJwmo4TdGW7VfQxNLavjCXviqxT9S1MgbjMNHr6Sp5";
+		let account_id = AccountId32::from_str(address).unwrap();
+		assert_eq!(convert_account_id_to_ah_address(&account_id), address);
 	}
 }
