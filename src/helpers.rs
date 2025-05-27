@@ -51,6 +51,10 @@ pub(crate) fn convert_account_id_to_ah_address(account_id: &AccountId32) -> Stri
 	Sr25519Public::from_raw(account_id.0).to_ss58check_with_version(Ss58AddressFormat::custom(0))
 }
 
+pub(crate) fn convert_account_id_to_general_substrate_address(account_id: &AccountId32) -> String {
+	Sr25519Public::from_raw(account_id.0).to_ss58check()
+}
+
 pub(crate) fn to_decimal_f64(value: u128, decimals: u8) -> f64 {
 	let factor = 10u128.pow(decimals as u32) as f64;
 	value as f64 / factor
@@ -114,6 +118,13 @@ mod tests {
 		let address = "15oF4uVJwmo4TdGW7VfQxNLavjCXviqxT9S1MgbjMNHr6Sp5";
 		let account_id = AccountId32::from_str(address).unwrap();
 		assert_eq!(convert_account_id_to_ah_address(&account_id), address);
+	}
+
+	#[test]
+	fn convert_account_id_to_general_substrate_address_test() {
+		let address = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+		let account_id = AccountId32::from_str(address).unwrap();
+		assert_eq!(convert_account_id_to_general_substrate_address(&account_id), address);
 	}
 
 	#[test]
