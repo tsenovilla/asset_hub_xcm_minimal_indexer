@@ -81,14 +81,6 @@ impl From<&MultiLocation> for DestinationChain {
 	}
 }
 
-// A simple struct to temporarily store some info about an Asset
-struct AssetInfo {
-	asset_name: String,
-	decimals: u8,
-	amount: u128,
-	is_teleportable: Option<bool>,
-}
-
 pub(crate) async fn get_outgoing_xcm_transfers_at_block_hash(
 	api: &OnlineClient<PolkadotConfig>,
 	block_hash: BlockHash,
@@ -178,25 +170,29 @@ async fn generate_xcm_sent_teleport_payload(
 		crate::asset_hub::polkadot_xcm::calls::types::LimitedTeleportAssets
 	);
 
+	let mut output = vec![];
 	// Asset hub only allows teleports of DOT and foreign assets to its native chain, so it's enough
 	// considering those cases.
-	let assets = match *decoded_extrinsic.assets {
+	match *decoded_extrinsic.assets {
 		VersionedAssets::V3(assets) => {
-			let mut assets_vec = vec![];
 			for asset in assets.0 {
-				let asset_id = asset.id;
-				let (asset_name, decimals) = match asset_id {
-					AssetId::Concrete(MultiLocation { parents: 1, interior: Junctions::Here }) =>
-						("DOT".to_owned(), DOT_DECIMALS),
+				let asset_details = match (asset.id, asset.fun) {
+					(
+						AssetId::Concrete(MultiLocation { parents: 1, interior: Junctions::Here }),
+						Fungibility::Fungible(amount),
+					) => Some(("DOT".to_owned(), DOT_DECIMALS, amount)),
 					// To query foreign_asset storage we need to use V4 Locations, so we need to
 					// convert our V3 multilocation into a V4 Location. For simplicity, we only
 					// support native tokens of sibling parachains in this case (which is the
 					// most common tho, it's not usual to see an asset from other parachain's
 					// pallet_assets)
-					AssetId::Concrete(MultiLocation {
-						parents: 1,
-						interior: Junctions::X1(Junction::Parachain(para_id)),
-					}) => {
+					(
+						AssetId::Concrete(MultiLocation {
+							parents: 1,
+							interior: Junctions::X1(Junction::Parachain(para_id)),
+						}),
+						Fungibility::Fungible(amount),
+					) => {
 						let AssetMetadataValues { asset_name, decimals } =
 							crate::helpers::extract_foreign_asset_metadata_values(
 								&storage_api,
@@ -206,35 +202,29 @@ async fn generate_xcm_sent_teleport_payload(
 								},
 							)
 							.await?;
-						(asset_name, decimals)
+						Some((asset_name, decimals, amount))
 					},
 					// TODO: Add support for other Assets Ids
-					_ => return Err(Error::GeneratePayloadFailed),
+					_ => None,
 				};
-				let amount = match asset.fun {
-					Fungibility::Fungible(amount) => amount,
-					_ => return Err(Error::GeneratePayloadFailed),
-				};
-				assets_vec.push(AssetInfo { asset_name, decimals, amount, is_teleportable: None });
+
+				if let Some((asset_name, decimals, amount)) = asset_details {
+					output.push(XcmOutgoingTransfer {
+						block_number,
+						destination_chain: destination_chain.clone(),
+						sender: sender.clone(),
+						receiver: receiver.clone(),
+						asset: asset_name,
+						amount: crate::helpers::to_decimal_f64(amount, decimals),
+						transfer_type: TransferType::Teleport,
+					});
+				}
 			}
-			assets_vec
 		},
 		// TODO: Add support for other junctions
-		_ => return Err(Error::GeneratePayloadFailed),
+		_ => (),
 	};
-
-	Ok(assets
-		.into_iter()
-		.map(|asset| XcmOutgoingTransfer {
-			block_number,
-			destination_chain: destination_chain.clone(),
-			sender: sender.clone(),
-			receiver: receiver.clone(),
-			asset: asset.asset_name,
-			amount: crate::helpers::to_decimal_f64(asset.amount, asset.decimals),
-			transfer_type: TransferType::Teleport,
-		})
-		.collect::<Vec<_>>())
+	Ok(output)
 }
 
 async fn generate_xcm_sent_reserve_transfer_payload(
@@ -247,25 +237,29 @@ async fn generate_xcm_sent_reserve_transfer_payload(
 		crate::asset_hub::polkadot_xcm::calls::types::LimitedReserveTransferAssets
 	);
 
-	let assets = match *decoded_extrinsic.assets {
+	let mut output = vec![];
+	match *decoded_extrinsic.assets {
 		VersionedAssets::V3(assets) => {
-			let mut assets_vec = vec![];
 			for asset in assets.0 {
-				let asset_id = asset.id;
-				let (asset_name, decimals) = match asset_id {
-					AssetId::Concrete(MultiLocation { parents: 1, interior: Junctions::Here }) =>
-						("DOT".to_owned(), DOT_DECIMALS),
+				let asset_details = match (asset.id, asset.fun) {
+					(
+						AssetId::Concrete(MultiLocation { parents: 1, interior: Junctions::Here }),
+						Fungibility::Fungible(amount),
+					) => Some(("DOT".to_owned(), DOT_DECIMALS, amount)),
 					// Pallet 50 is Assets, to recover the metadata, we cannot look for it as if it
 					// by location but using the AssetId. Pallet indexes cannot change without
 					// breaking the runtime, so it's OK to hardcode it here
-					AssetId::Concrete(MultiLocation {
-						parents: 0,
-						interior:
-							Junctions::X2(
-								Junction::PalletInstance(50),
-								Junction::GeneralIndex(asset_id),
-							),
-					}) => {
+					(
+						AssetId::Concrete(MultiLocation {
+							parents: 0,
+							interior:
+								Junctions::X2(
+									Junction::PalletInstance(50),
+									Junction::GeneralIndex(asset_id),
+								),
+						}),
+						Fungibility::Fungible(amount),
+					) => {
 						let AssetMetadataValues { asset_name, decimals } =
 							crate::helpers::extract_asset_metadata_values(
 								&storage_api,
@@ -276,17 +270,20 @@ async fn generate_xcm_sent_reserve_transfer_payload(
 									as crate::asset_hub::assets::storage::types::metadata::Param0),
 							)
 							.await?;
-						(asset_name, decimals)
+						Some((asset_name, decimals, amount))
 					},
 					// To query foreign_asset storage we need to use V4 Locations, so we need to
 					// convert our V3 multilocation into a V4 Location. For simplicity, we only
 					// support native tokens of sibling parachains in this case (which is the
 					// most common tho, it's not usual to see an asset from other parachain's
 					// pallet_assets)
-					AssetId::Concrete(MultiLocation {
-						parents: 1,
-						interior: Junctions::X1(Junction::Parachain(para_id)),
-					}) => {
+					(
+						AssetId::Concrete(MultiLocation {
+							parents: 1,
+							interior: Junctions::X1(Junction::Parachain(para_id)),
+						}),
+						Fungibility::Fungible(amount),
+					) => {
 						let AssetMetadataValues { asset_name, decimals } =
 							crate::helpers::extract_foreign_asset_metadata_values(
 								&storage_api,
@@ -296,35 +293,28 @@ async fn generate_xcm_sent_reserve_transfer_payload(
 								},
 							)
 							.await?;
-						(asset_name, decimals)
+						Some((asset_name, decimals, amount))
 					},
 					// TODO: Add support for other Assets Ids
-					_ => return Err(Error::GeneratePayloadFailed),
+					_ => None,
 				};
-				let amount = match asset.fun {
-					Fungibility::Fungible(amount) => amount,
-					_ => return Err(Error::GeneratePayloadFailed),
-				};
-				assets_vec.push(AssetInfo { asset_name, decimals, amount, is_teleportable: None });
+				if let Some((asset_name, decimals, amount)) = asset_details {
+					output.push(XcmOutgoingTransfer {
+						block_number,
+						destination_chain: destination_chain.clone(),
+						sender: sender.clone(),
+						receiver: receiver.clone(),
+						asset: asset_name,
+						amount: crate::helpers::to_decimal_f64(amount, decimals),
+						transfer_type: TransferType::Reserve,
+					});
+				}
 			}
-			assets_vec
 		},
 		// TODO: Add support for other junctions
-		_ => return Err(Error::GeneratePayloadFailed),
+		_ => (),
 	};
-
-	Ok(assets
-		.into_iter()
-		.map(|asset| XcmOutgoingTransfer {
-			block_number,
-			destination_chain: destination_chain.clone(),
-			sender: sender.clone(),
-			receiver: receiver.clone(),
-			asset: asset.asset_name,
-			amount: crate::helpers::to_decimal_f64(asset.amount, asset.decimals),
-			transfer_type: TransferType::Reserve,
-		})
-		.collect::<Vec<_>>())
+	Ok(output)
 }
 
 async fn generate_xcm_sent_transfer_assets_payload(
@@ -337,25 +327,29 @@ async fn generate_xcm_sent_transfer_assets_payload(
 		crate::asset_hub::polkadot_xcm::calls::types::TransferAssets
 	);
 
-	let assets = match *decoded_extrinsic.assets {
+	let mut output = vec![];
+	match *decoded_extrinsic.assets {
 		VersionedAssets::V3(assets) => {
-			let mut assets_vec = vec![];
 			for asset in assets.0 {
-				let asset_id = asset.id;
-				let (asset_name, decimals, is_teleportable) = match asset_id {
-					AssetId::Concrete(MultiLocation { parents: 1, interior: Junctions::Here }) =>
-						("DOT".to_owned(), DOT_DECIMALS, true),
+				let asset_details = match (asset.id, asset.fun) {
+					(
+						AssetId::Concrete(MultiLocation { parents: 1, interior: Junctions::Here }),
+						Fungibility::Fungible(amount),
+					) => Some(("DOT".to_owned(), DOT_DECIMALS, amount, true)),
 					// Pallet 50 is Assets, to recover the metadata, we cannot look for it as if it
 					// were a foriegn asset. Pallet indexes cannot change without breaking the
 					// runtime, so it's OK to hardcode it here
-					AssetId::Concrete(MultiLocation {
-						parents: 0,
-						interior:
-							Junctions::X2(
-								Junction::PalletInstance(50),
-								Junction::GeneralIndex(asset_id),
-							),
-					}) => {
+					(
+						AssetId::Concrete(MultiLocation {
+							parents: 0,
+							interior:
+								Junctions::X2(
+									Junction::PalletInstance(50),
+									Junction::GeneralIndex(asset_id),
+								),
+						}),
+						Fungibility::Fungible(amount),
+					) => {
 						let AssetMetadataValues { asset_name, decimals } =
 							crate::helpers::extract_asset_metadata_values(
 								&storage_api,
@@ -367,17 +361,20 @@ async fn generate_xcm_sent_transfer_assets_payload(
 							)
 							.await?;
 						// These assets aren't teleportable
-						(asset_name, decimals, false)
+						Some((asset_name, decimals, amount, false))
 					},
 					// To query foreign_asset storage we need to use V4 Locations, so we need to
 					// convert our V3 multilocation into a V4 Location. For simplicity, we only
 					// support native tokens of sibling parachains in this case (which is the
 					// most common tho, it's not usual to see an asset from other parachain's
 					// pallet_assets)
-					AssetId::Concrete(MultiLocation {
-						parents: 1,
-						interior: Junctions::X1(Junction::Parachain(para_id)),
-					}) => {
+					(
+						AssetId::Concrete(MultiLocation {
+							parents: 1,
+							interior: Junctions::X1(Junction::Parachain(para_id)),
+						}),
+						Fungibility::Fungible(amount),
+					) => {
 						let asset_location_in_v4 = Location {
 							parents: 1,
 							interior: V4Junctions::X1([V4Junction::Parachain(para_id)]),
@@ -400,44 +397,32 @@ async fn generate_xcm_sent_transfer_assets_payload(
 							} else {
 								false
 							};
-						(asset_name, decimals, is_teleportable)
+						Some((asset_name, decimals, amount, is_teleportable))
 					},
 					// TODO: Add support for other Assets Ids
-					_ => return Err(Error::GeneratePayloadFailed),
+					_ => None,
 				};
-				let amount = match asset.fun {
-					Fungibility::Fungible(amount) => amount,
-					_ => return Err(Error::GeneratePayloadFailed),
-				};
-				assets_vec.push(AssetInfo {
-					asset_name,
-					decimals,
-					amount,
-					is_teleportable: Some(is_teleportable),
-				});
+				if let Some((asset_name, decimals, amount, is_teleportable)) = asset_details {
+					output.push(XcmOutgoingTransfer {
+						block_number,
+						destination_chain: destination_chain.clone(),
+						sender: sender.clone(),
+						receiver: receiver.clone(),
+						asset: asset_name,
+						amount: crate::helpers::to_decimal_f64(amount, decimals),
+						transfer_type: if is_teleportable {
+							TransferType::Teleport
+						} else {
+							TransferType::Reserve
+						},
+					});
+				}
 			}
-			assets_vec
 		},
 		// TODO: Add support for other junctions
-		_ => return Err(Error::GeneratePayloadFailed),
+		_ => (),
 	};
-
-	Ok(assets
-		.into_iter()
-		.map(|asset| XcmOutgoingTransfer {
-			block_number,
-			destination_chain: destination_chain.clone(),
-			sender: sender.clone(),
-			receiver: receiver.clone(),
-			asset: asset.asset_name,
-			amount: crate::helpers::to_decimal_f64(asset.amount, asset.decimals),
-			transfer_type: if let Some(true) = asset.is_teleportable {
-				TransferType::Teleport
-			} else {
-				TransferType::Reserve
-			},
-		})
-		.collect::<Vec<_>>())
+	Ok(output)
 }
 
 #[cfg(test)]
@@ -475,7 +460,7 @@ mod tests {
 			.await
 			.unwrap();
 
-    // DOT transfer to Kusama Asset Hub
+		// DOT transfer to Kusama Asset Hub
 		let block_hash_hex = "0xd61d764410e0f638f59943c5ba7a2261098878cb421e95bb5eceb167116aa827";
 		let block_hash: BlockHash = block_hash_hex.parse().unwrap();
 		let xcm_transfer =
