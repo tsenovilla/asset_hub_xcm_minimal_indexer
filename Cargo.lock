@@ -4778,7 +4778,9 @@ name = "xcm_minimal_indexer"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "hex",
  "serde",
+ "serde_json",
  "sp-core",
  "subxt",
  "thiserror 2.0.12",

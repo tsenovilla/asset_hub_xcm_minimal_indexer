@@ -10,8 +10,7 @@ use sp_core::{
 	sr25519::Public as Sr25519Public,
 };
 use subxt::{
-	Metadata, OnlineClient, PolkadotConfig, config::polkadot::AccountId32, runtime_api::RuntimeApi,
-	storage::Storage,
+	Metadata, OnlineClient, PolkadotConfig, config::polkadot::AccountId32, storage::Storage,
 };
 
 pub(crate) type XcmAggregatedOrigin = crate::asset_hub::message_queue::events::processed::Origin;
