@@ -3,7 +3,7 @@ use crate::{
 	helpers::XcmAggregatedOrigin,
 	types::{AssetMetadataValues, BlockHash, BlockNumber, DOT_DECIMALS, TransferType},
 };
-use serde::{Serialize, Serializer};
+use serde::Serialize;
 use subxt::{
 	OnlineClient, PolkadotConfig,
 	blocks::BlockRef,
@@ -22,32 +22,19 @@ pub(crate) struct XcmIncomingTransfer {
 	transfer_type: TransferType,
 }
 
-#[derive(Debug)]
-pub(crate) struct OriginChain(XcmAggregatedOrigin);
-
-impl Serialize for OriginChain {
-	fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-	where
-		S: Serializer,
-	{
-		match &self.0 {
-			XcmAggregatedOrigin::Here => serializer.serialize_str("Polkadot Asset Hub"),
-			XcmAggregatedOrigin::Parent => serializer.serialize_str("Polkadot"),
-			XcmAggregatedOrigin::Sibling(id) =>
-				serializer.serialize_str(&format!("Sibling parachain #{:?}", id)),
-		}
-	}
+#[derive(Debug, Serialize, Clone, PartialEq)]
+pub(crate) enum OriginChain {
+	Polkadot,
+	PolkadotAssetHub,
+	PolkadotParachain(u32),
 }
 
-impl PartialEq for OriginChain {
-	fn eq(&self, other: &Self) -> bool {
-		match (&self.0, &other.0) {
-			(XcmAggregatedOrigin::Here, XcmAggregatedOrigin::Here) |
-			(XcmAggregatedOrigin::Parent, XcmAggregatedOrigin::Parent) => true,
-			(XcmAggregatedOrigin::Sibling(id_1), XcmAggregatedOrigin::Sibling(id_2))
-				if id_1.0 == id_2.0 =>
-				true,
-			_ => false,
+impl From<XcmAggregatedOrigin> for OriginChain {
+	fn from(origin: XcmAggregatedOrigin) -> Self {
+		match origin {
+			XcmAggregatedOrigin::Here => Self::PolkadotAssetHub,
+			XcmAggregatedOrigin::Parent => Self::Polkadot,
+			XcmAggregatedOrigin::Sibling(id) => Self::PolkadotParachain(id.0),
 		}
 	}
 }
@@ -63,7 +50,7 @@ pub(crate) async fn get_incoming_xcm_transfers_at_block_hash(
 	let storage = block.storage();
 
 	let mut output = Vec::new();
-	let mut last_issuance_event = None;
+	let mut last_issuance_events = vec![];
 
 	for event in events {
 		// Don't block the indexer if the event is an error.
@@ -71,22 +58,23 @@ pub(crate) async fn get_incoming_xcm_transfers_at_block_hash(
 			match (event.phase(), event.pallet_name(), event.variant_name()) {
 				(Phase::Finalization, "Assets", "Issued") |
 				(Phase::Finalization, "ForeignAssets", "Issued") => {
-					last_issuance_event = Some(event);
+					last_issuance_events.push(event);
 				},
 				(Phase::Finalization, "Balances", "Minted") => {
-					last_issuance_event = Some(event);
+					last_issuance_events.push(event);
 				},
 				(Phase::Finalization, "MessageQueue", "Processed") => {
 					if let Ok(payload) = generate_xcm_received_payload(
 						&storage,
 						block_number,
-						last_issuance_event.take(),
+						last_issuance_events,
 						event,
 					)
 					.await
 					{
-						output.push(payload);
+						output.extend(payload);
 					}
+					last_issuance_events = vec![];
 				},
 				_ => (),
 			}
@@ -99,9 +87,9 @@ pub(crate) async fn get_incoming_xcm_transfers_at_block_hash(
 async fn generate_xcm_received_payload(
 	storage_api: &Storage<PolkadotConfig, OnlineClient<PolkadotConfig>>,
 	block_number: BlockNumber,
-	last_issuance_event: Option<EventDetails<PolkadotConfig>>,
+	last_issuance_events: Vec<EventDetails<PolkadotConfig>>,
 	processed_message_event: EventDetails<PolkadotConfig>,
-) -> Result<XcmIncomingTransfer, Error> {
+) -> Result<Vec<XcmIncomingTransfer>, Error> {
 	let processed_message_event_decoded = if let Ok(Some(event)) =
 		processed_message_event.as_event::<crate::asset_hub::message_queue::events::Processed>()
 	{
@@ -115,91 +103,93 @@ async fn generate_xcm_received_payload(
 	}
 
 	// Extract xcm origin from the message_queue event
-	let message_origin = processed_message_event_decoded.origin;
+	let origin_chain = OriginChain::from(processed_message_event_decoded.origin);
 
-	// Extract all relevant info from issuance_event.
-	let (asset, amount, receiver, transfer_type) = match (
-		&message_origin,
-		last_issuance_event.as_ref().map(|event| {
-			event.as_event::<crate::asset_hub::balances::events::Minted>().ok().flatten()
-		}),
-		last_issuance_event.as_ref().map(|event| {
-			event.as_event::<crate::asset_hub::assets::events::Issued>().ok().flatten()
-		}),
-		last_issuance_event.as_ref().map(|event| {
-			event
+	// Extract all relevant info from issuance_events.
+	let mut received_assets = vec![];
+	for issuance_event in last_issuance_events {
+		let issuance_info = match (
+			&origin_chain,
+			issuance_event
+				.as_event::<crate::asset_hub::balances::events::Minted>()
+				.ok()
+				.flatten(),
+			issuance_event
+				.as_event::<crate::asset_hub::assets::events::Issued>()
+				.ok()
+				.flatten(),
+			issuance_event
 				.as_event::<crate::asset_hub::foreign_assets::events::Issued>()
 				.ok()
-				.flatten()
-		}),
-	) {
-		// DOT from relay is always Teleport
-		(XcmAggregatedOrigin::Parent, Some(Some(minted_event)), Some(None), Some(None)) => (
-			"DOT".to_owned(),
-			crate::helpers::to_decimal_f64(minted_event.amount, DOT_DECIMALS),
-			crate::helpers::convert_account_id_to_ah_address(&minted_event.who),
-			TransferType::Teleport,
-		),
-		// DOT from sibling parachains is always reserve
-		(XcmAggregatedOrigin::Sibling(_), Some(Some(minted_event)), Some(None), Some(None)) => (
-			"DOT".to_owned(),
-			crate::helpers::to_decimal_f64(minted_event.amount, DOT_DECIMALS),
-			crate::helpers::convert_account_id_to_ah_address(&minted_event.who),
-			TransferType::Reserve,
-		),
-		(XcmAggregatedOrigin::Sibling(_), Some(None), Some(Some(issue_event)), Some(None)) => {
-			let asset_id = issue_event.asset_id;
-
-			let AssetMetadataValues { asset_name: asset, decimals } =
-				crate::helpers::extract_asset_metadata_values(&storage_api, &asset_id).await?;
-			(
-				asset,
-				crate::helpers::to_decimal_f64(issue_event.amount, decimals),
-				crate::helpers::convert_account_id_to_ah_address(&issue_event.owner),
+				.flatten(),
+		) {
+			// DOT from relay is always Teleport
+			(OriginChain::Polkadot, Some(minted_event), None, None) => Some((
+				"DOT".to_owned(),
+				crate::helpers::to_decimal_f64(minted_event.amount, DOT_DECIMALS),
+				crate::helpers::convert_account_id_to_ah_address(&minted_event.who),
+				TransferType::Teleport,
+			)),
+			// DOT from sibling parachains is always reserve
+			(OriginChain::PolkadotParachain(_), Some(minted_event), None, None) => Some((
+				"DOT".to_owned(),
+				crate::helpers::to_decimal_f64(minted_event.amount, DOT_DECIMALS),
+				crate::helpers::convert_account_id_to_ah_address(&minted_event.who),
 				TransferType::Reserve,
-			)
-		},
-		(
-			XcmAggregatedOrigin::Sibling(sibling_para_id),
-			Some(None),
-			Some(None),
-			Some(Some(issue_event)),
-		) => {
-			let asset_id = issue_event.asset_id;
-			let AssetMetadataValues { asset_name: asset, decimals } =
-				crate::helpers::extract_foreign_asset_metadata_values(&storage_api, &asset_id)
-					.await?;
-			// An asset in ForeignAsset may be transferred by teleport or reserve transfer. Check if
-			// the asset is teleportable, this is, if it's a sibling concrete asset for the origin
-			// chain, otherwise consider it a reserve transfer (not necessarily true tho, someone
-			// may configure a runtime trusting AH as reserve for a teleportable asset, but this is
-			// pretty unlikely as there's not any advantage/attack opportunity by doing so. So while
-			// theoretically possible, let's discard this option for simplicity of the indexer).
-			let transfer_type =
-				if crate::helpers::is_teleportable_to_sibling(&asset_id, sibling_para_id.0) {
-					TransferType::Teleport
-				} else {
-					TransferType::Reserve
-				};
-			(
-				asset,
-				crate::helpers::to_decimal_f64(issue_event.amount, decimals),
-				crate::helpers::convert_account_id_to_ah_address(&issue_event.owner),
-				transfer_type,
-			)
-		},
-		// Any other combination isn't a valid Xcm transfer
-		_ => return Err(Error::GeneratePayloadFailed),
-	};
+			)),
+			(OriginChain::PolkadotParachain(_), None, Some(issue_event), None) => {
+				let asset_id = issue_event.asset_id;
 
-	Ok(XcmIncomingTransfer {
-		block_number,
-		origin_chain: OriginChain(message_origin),
-		receiver,
-		asset,
-		amount,
-		transfer_type,
-	})
+				let AssetMetadataValues { asset_name: asset, decimals } =
+					crate::helpers::extract_asset_metadata_values(&storage_api, &asset_id).await?;
+				Some((
+					asset,
+					crate::helpers::to_decimal_f64(issue_event.amount, decimals),
+					crate::helpers::convert_account_id_to_ah_address(&issue_event.owner),
+					TransferType::Reserve,
+				))
+			},
+			(OriginChain::PolkadotParachain(sibling_para_id), None, None, Some(issue_event)) => {
+				let asset_id = issue_event.asset_id;
+				let AssetMetadataValues { asset_name: asset, decimals } =
+					crate::helpers::extract_foreign_asset_metadata_values(&storage_api, &asset_id)
+						.await?;
+				// An asset in ForeignAsset may be transferred by teleport or reserve transfer.
+				// Check if the asset is teleportable, this is, if it's a sibling concrete asset
+				// for the origin chain, otherwise consider it a reserve transfer (not
+				// necessarily true tho, someone may configure a runtime trusting AH as reserve
+				// for a teleportable asset, but this is pretty unlikely as there's not any
+				// advantage/attack opportunity by doing so. So while theoretically possible,
+				// let's discard this option for simplicity of the indexer).
+				let transfer_type =
+					if crate::helpers::is_teleportable_to_sibling(&asset_id, *sibling_para_id) {
+						TransferType::Teleport
+					} else {
+						TransferType::Reserve
+					};
+				Some((
+					asset,
+					crate::helpers::to_decimal_f64(issue_event.amount, decimals),
+					crate::helpers::convert_account_id_to_ah_address(&issue_event.owner),
+					transfer_type,
+				))
+			},
+			// Any other combination isn't a valid Xcm transfer
+			_ => None,
+		};
+		if let Some((asset, amount, receiver, transfer_type)) = issuance_info {
+			received_assets.push(XcmIncomingTransfer {
+				block_number,
+				origin_chain: origin_chain.clone(),
+				receiver,
+				asset,
+				amount,
+				transfer_type,
+			})
+		};
+	}
+
+	Ok(received_assets)
 }
 
 #[cfg(test)]
@@ -223,7 +213,7 @@ mod tests {
 			vec![
 				XcmIncomingTransfer {
 					block_number: 8_900_358,
-					origin_chain: OriginChain(XcmAggregatedOrigin::Sibling(Id(2034))),
+					origin_chain: OriginChain::PolkadotParachain(2034),
 					receiver: "15B8BaJCPi1HWY7Rty23t3PEUc9d36PGGBHSJ2Y4xzdwvaLK".to_owned(),
 					asset: "DOT".to_owned(),
 					amount: 7.5433009963,
@@ -231,7 +221,7 @@ mod tests {
 				},
 				XcmIncomingTransfer {
 					block_number: 8_900_358,
-					origin_chain: OriginChain(XcmAggregatedOrigin::Sibling(Id(2034))),
+					origin_chain: OriginChain::PolkadotParachain(2034),
 					receiver: "12F62Gzyig1CpWEB9qaU7QkmRf4SmvnXJ3BER1poLxDoq12K".to_owned(),
 					asset: "USD Coin".to_owned(),
 					amount: 49.292041,
@@ -249,7 +239,7 @@ mod tests {
 			xcm_transfer,
 			vec![XcmIncomingTransfer {
 				block_number: 8_898_884,
-				origin_chain: OriginChain(XcmAggregatedOrigin::Sibling(Id(2004))),
+				origin_chain: OriginChain::PolkadotParachain(2004),
 				receiver: "13KsaHFcQKSTd4m73Ub9yVwM1JGCZvipMyTZonHEXEceFYwS".to_owned(),
 				asset: "USD Coin".to_owned(),
 				amount: 9_401.612723,
@@ -264,14 +254,24 @@ mod tests {
 			get_incoming_xcm_transfers_at_block_hash(&api, block_hash).await.unwrap();
 		assert_eq!(
 			xcm_transfer,
-			vec![XcmIncomingTransfer {
-				block_number: 8_898_898,
-				origin_chain: OriginChain(XcmAggregatedOrigin::Sibling(Id(1002))),
-				receiver: "12aoZXwbUzsv3z5HF5HCrtEwBJYCeKne6rYsxFEKDZ86Wdv8".to_owned(),
-				asset: "Wrapped Ether".to_owned(),
-				amount: 0.0001,
-				transfer_type: TransferType::Reserve
-			}]
+			vec![
+				XcmIncomingTransfer {
+					block_number: 8898898,
+					origin_chain: OriginChain::PolkadotParachain(1002),
+					receiver: "12aoZXwbUzsv3z5HF5HCrtEwBJYCeKne6rYsxFEKDZ86Wdv8".to_owned(),
+					asset: "DOT".to_owned(),
+					amount: 0.0325895284,
+					transfer_type: TransferType::Reserve
+				},
+				XcmIncomingTransfer {
+					block_number: 8_898_898,
+					origin_chain: OriginChain::PolkadotParachain(1002),
+					receiver: "12aoZXwbUzsv3z5HF5HCrtEwBJYCeKne6rYsxFEKDZ86Wdv8".to_owned(),
+					asset: "Wrapped Ether".to_owned(),
+					amount: 0.0001,
+					transfer_type: TransferType::Reserve
+				}
+			]
 		);
 	}
 
@@ -290,7 +290,7 @@ mod tests {
 			xcm_transfer,
 			vec![XcmIncomingTransfer {
 				block_number: 8_901_175,
-				origin_chain: OriginChain(XcmAggregatedOrigin::Parent),
+				origin_chain: OriginChain::Polkadot,
 				receiver: "13p9Fcn4eVJzHZL7Z6RXbRhEzjAYLU26BohYmy18yHXnMovT".to_owned(),
 				asset: "DOT".to_owned(),
 				amount: 8.8602977965,
