@@ -3,6 +3,7 @@ use crate::{
 	asset_hub::runtime_types::staging_xcm::v4::{
 		junction::Junction, junctions::Junctions, location::Location,
 	},
+	types::AssetMetadataValues,
 };
 use sp_core::{
 	crypto::{Ss58AddressFormat, Ss58Codec},
@@ -10,6 +11,7 @@ use sp_core::{
 };
 use subxt::{
 	Metadata, OnlineClient, PolkadotConfig, config::polkadot::AccountId32, runtime_api::RuntimeApi,
+	storage::Storage,
 };
 
 pub(crate) type XcmAggregatedOrigin = crate::asset_hub::message_queue::events::processed::Origin;
@@ -45,6 +47,46 @@ pub(crate) fn is_sibling_concrete_asset_for_message_origin(
 	} else {
 		false
 	}
+}
+
+pub(crate) async fn extract_asset_metadata_values(
+	storage_api: &Storage<PolkadotConfig, OnlineClient<PolkadotConfig>>,
+	asset_id: &crate::asset_hub::assets::storage::types::metadata::Param0,
+) -> Result<AssetMetadataValues, Error> {
+	let asset_metadata_address = crate::asset_hub::storage().assets().metadata(asset_id);
+	let asset_metadata = storage_api.fetch(&asset_metadata_address).await?;
+	let decimals = if let Some(decimals) = asset_metadata.as_ref().map(|metadata| metadata.decimals)
+	{
+		decimals
+	} else {
+		0
+	};
+	let asset_name = if let Some(name_bytes) = asset_metadata.map(|metadata| metadata.name) {
+		String::from_utf8(name_bytes.0).unwrap_or(format!("Asset id: {}", &asset_id))
+	} else {
+		format!("Asset Id: {}", &asset_id)
+	};
+	Ok(AssetMetadataValues { asset_name, decimals })
+}
+
+pub(crate) async fn extract_foreign_asset_metadata_values(
+	storage_api: &Storage<PolkadotConfig, OnlineClient<PolkadotConfig>>,
+	asset_id: &crate::asset_hub::foreign_assets::storage::types::metadata::Param0,
+) -> Result<AssetMetadataValues, Error> {
+	let asset_metadata_address = crate::asset_hub::storage().foreign_assets().metadata(asset_id);
+	let asset_metadata = storage_api.fetch(&asset_metadata_address).await?;
+	let decimals = if let Some(decimals) = asset_metadata.as_ref().map(|metadata| metadata.decimals)
+	{
+		decimals
+	} else {
+		0
+	};
+	let asset_name = if let Some(name_bytes) = asset_metadata.map(|metadata| metadata.name) {
+		String::from_utf8(name_bytes.0).unwrap_or(format!("Asset location: {:?}", &asset_id))
+	} else {
+		format!("Asset location: {:?}", &asset_id)
+	};
+	Ok(AssetMetadataValues { asset_name, decimals })
 }
 
 pub(crate) fn convert_account_id_to_ah_address(account_id: &AccountId32) -> String {
@@ -111,6 +153,39 @@ mod tests {
 			&XcmAggregatedOrigin::Here,
 			&asset_id
 		));
+	}
+
+	#[tokio::test]
+	async fn extract_asset_metadata_values_test() {
+		let api = OnlineClient::<PolkadotConfig>::from_url(crate::types::ASSET_HUB_RPC_ENDPOINT)
+			.await
+			.unwrap();
+		let storage_api = api.storage().at_latest().await.unwrap();
+
+		// Asset 1984 is Tether
+		assert_eq!(
+			extract_asset_metadata_values(&storage_api, &1984).await.unwrap(),
+			AssetMetadataValues { asset_name: "Tether USD".to_owned(), decimals: 6 }
+		);
+	}
+
+	#[tokio::test]
+	async fn extract_foreign_asset_metadata_values_test() {
+		let api = OnlineClient::<PolkadotConfig>::from_url(crate::types::ASSET_HUB_RPC_ENDPOINT)
+			.await
+			.unwrap();
+		let storage_api = api.storage().at_latest().await.unwrap();
+
+		// (1, X1(Parachain(3370))) is LAOS
+		assert_eq!(
+			extract_foreign_asset_metadata_values(
+				&storage_api,
+				&Location { parents: 1, interior: Junctions::X1([Junction::Parachain(3370)]) }
+			)
+			.await
+			.unwrap(),
+			AssetMetadataValues { asset_name: "LAOS".to_owned(), decimals: 18 }
+		);
 	}
 
 	#[test]

@@ -1,7 +1,7 @@
 use crate::{
 	Error,
 	helpers::XcmAggregatedOrigin,
-	types::{BlockHash, BlockNumber, DOT_DECIMALS, TransferType},
+	types::{AssetMetadataValues, BlockHash, BlockNumber, DOT_DECIMALS, TransferType},
 };
 use serde::{Serialize, Serializer};
 use subxt::{
@@ -149,19 +149,9 @@ async fn generate_xcm_received_payload(
 		),
 		(XcmAggregatedOrigin::Sibling(_), Some(None), Some(Some(issue_event)), Some(None)) => {
 			let asset_id = issue_event.asset_id;
-			let asset_metadata_address = crate::asset_hub::storage().assets().metadata(&asset_id);
-			let asset_metadata = storage_api.fetch(&asset_metadata_address).await?;
-			let decimals =
-				if let Some(decimals) = asset_metadata.as_ref().map(|metadata| metadata.decimals) {
-					decimals
-				} else {
-					0
-				};
-			let asset = if let Some(name_bytes) = asset_metadata.map(|metadata| metadata.name) {
-				String::from_utf8(name_bytes.0).unwrap_or(format!("Asset id: {}", &asset_id))
-			} else {
-				format!("Asset Id: {}", &asset_id)
-			};
+
+			let AssetMetadataValues { asset_name: asset, decimals } =
+				crate::helpers::extract_asset_metadata_values(&storage_api, &asset_id).await?;
 			(
 				asset,
 				crate::helpers::to_decimal_f64(issue_event.amount, decimals),
@@ -171,21 +161,9 @@ async fn generate_xcm_received_payload(
 		},
 		(XcmAggregatedOrigin::Sibling(_), Some(None), Some(None), Some(Some(issue_event))) => {
 			let asset_id = issue_event.asset_id;
-			let asset_metadata_address =
-				crate::asset_hub::storage().foreign_assets().metadata(&asset_id);
-			let asset_metadata = storage_api.fetch(&asset_metadata_address).await?;
-			let decimals =
-				if let Some(decimals) = asset_metadata.as_ref().map(|metadata| metadata.decimals) {
-					decimals
-				} else {
-					0
-				};
-			let asset = if let Some(name_bytes) = asset_metadata.map(|metadata| metadata.name) {
-				String::from_utf8(name_bytes.0)
-					.unwrap_or(format!("Asset location: {:?}", &asset_id))
-			} else {
-				format!("Asset location: {:?}", &asset_id)
-			};
+			let AssetMetadataValues { asset_name: asset, decimals } =
+				crate::helpers::extract_foreign_asset_metadata_values(&storage_api, &asset_id)
+					.await?;
 			// An asset in ForeignAsset may be transferred by teleport or reserve transfer. Check if
 			// the asset is teleportable, this is, if it's a sibling concrete asset for the origin
 			// chain, otherwise consider it a reserve transfer (not necessarily true tho, someone

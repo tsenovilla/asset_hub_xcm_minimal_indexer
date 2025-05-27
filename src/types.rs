@@ -15,6 +15,12 @@ pub(crate) enum TransferType {
 	Reserve,
 }
 
+#[derive(Debug, Serialize, PartialEq)]
+pub(crate) struct AssetMetadataValues {
+	pub(crate) asset_name: String,
+	pub(crate) decimals: u8,
+}
+
 pub(crate) type BlockHash =
 	<<PolkadotConfig as subxt::config::Config>::Hasher as subxt::config::Hasher>::Output;
 
