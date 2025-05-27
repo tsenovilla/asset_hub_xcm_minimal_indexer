@@ -1,7 +1,7 @@
 use crate::{
 	Error,
 	helpers::XcmAggregatedOrigin,
-	types::{BlockHash, BlockNumber, TransferType},
+	types::{BlockHash, BlockNumber, DOT_DECIMALS, TransferType},
 };
 use serde::{Serialize, Serializer};
 use subxt::{
@@ -18,7 +18,7 @@ pub(crate) struct XcmIncomingTransfer {
 	origin_chain: OriginChain,
 	receiver: String,
 	asset: String,
-	amount: u128,
+	amount: f64,
 	transfer_type: TransferType,
 }
 
@@ -65,8 +65,6 @@ pub(crate) async fn get_incoming_xcm_transfers_at_block_hash(
 	let mut output = Vec::new();
 	let mut last_issuance_event = None;
 
-	let mut events_from_last_issuance_event_to_message_processed_event = 0;
-
 	for event in events {
 		// Don't block the indexer if the event is an error.
 		if let Ok(event) = event {
@@ -74,11 +72,9 @@ pub(crate) async fn get_incoming_xcm_transfers_at_block_hash(
 				(Phase::Finalization, "Assets", "Issued") |
 				(Phase::Finalization, "ForeignAssets", "Issued") => {
 					last_issuance_event = Some(event);
-					events_from_last_issuance_event_to_message_processed_event = 0;
 				},
 				(Phase::Finalization, "Balances", "Minted") => {
 					last_issuance_event = Some(event);
-					events_from_last_issuance_event_to_message_processed_event = 0;
 				},
 				(Phase::Finalization, "MessageQueue", "Processed") => {
 					if let Ok(payload) = generate_xcm_received_payload(
@@ -86,15 +82,13 @@ pub(crate) async fn get_incoming_xcm_transfers_at_block_hash(
 						block_number,
 						last_issuance_event.take(),
 						event,
-						events_from_last_issuance_event_to_message_processed_event,
 					)
 					.await
 					{
 						output.push(payload);
 					}
-					events_from_last_issuance_event_to_message_processed_event += 1;
 				},
-				_ => events_from_last_issuance_event_to_message_processed_event += 1,
+				_ => (),
 			}
 		}
 	}
@@ -107,13 +101,14 @@ async fn generate_xcm_received_payload(
 	block_number: BlockNumber,
 	last_issuance_event: Option<EventDetails<PolkadotConfig>>,
 	processed_message_event: EventDetails<PolkadotConfig>,
-	events_from_last_issuance_event_to_message_processed_event: u32,
 ) -> Result<XcmIncomingTransfer, Error> {
-	let processed_message_event_decoded = processed_message_event
-		.as_event::<crate::asset_hub::message_queue::events::Processed>()?
-		.expect(
-			"The event is the expected due to the pattern binding, so this is always Some; qed;",
-		);
+	let processed_message_event_decoded = if let Ok(Some(event)) =
+		processed_message_event.as_event::<crate::asset_hub::message_queue::events::Processed>()
+	{
+		event
+	} else {
+		return Err(Error::GeneratePayloadFailed);
+	};
 
 	if !processed_message_event_decoded.success {
 		return Err(Error::UnsuccessfulXcmMessage);
@@ -123,14 +118,8 @@ async fn generate_xcm_received_payload(
 	let message_origin = processed_message_event_decoded.origin;
 
 	// Extract all relevant info from issuance_event.
-	// When an Xcm transfer happen, two events are emitted after minting the assets to the receiver
-	// before the message processed event is emitted: the first one notifies that some balance was
-	// issued to pay fees, the second one notifies that the fees where paid. If this structure
-	// isn't followed, we cannot ensure that the xcm message is actually a transfer => hence the
-	// purpose of the event counter.
 	let (asset, amount, receiver, transfer_type) = match (
 		&message_origin,
-		events_from_last_issuance_event_to_message_processed_event,
 		last_issuance_event.as_ref().map(|event| {
 			event.as_event::<crate::asset_hub::balances::events::Minted>().ok().flatten()
 		}),
@@ -144,16 +133,30 @@ async fn generate_xcm_received_payload(
 				.flatten()
 		}),
 	) {
-		(XcmAggregatedOrigin::Parent, 2, Some(Some(minted_event)), Some(None), Some(None)) => (
+		// DOT from relay is always Teleport
+		(XcmAggregatedOrigin::Parent, Some(Some(minted_event)), Some(None), Some(None)) => (
 			"DOT".to_owned(),
-			minted_event.amount,
+			crate::helpers::to_decimal_f64(minted_event.amount, DOT_DECIMALS),
 			crate::helpers::convert_account_id_to_ah_address(&minted_event.who),
 			TransferType::Teleport,
 		),
-		(XcmAggregatedOrigin::Sibling(_), 2, Some(None), Some(Some(issue_event)), Some(None)) => {
+		// DOT from sibling parachains is always reserve
+		(XcmAggregatedOrigin::Sibling(_), Some(Some(minted_event)), Some(None), Some(None)) => (
+			"DOT".to_owned(),
+			crate::helpers::to_decimal_f64(minted_event.amount, DOT_DECIMALS),
+			crate::helpers::convert_account_id_to_ah_address(&minted_event.who),
+			TransferType::Reserve,
+		),
+		(XcmAggregatedOrigin::Sibling(_), Some(None), Some(Some(issue_event)), Some(None)) => {
 			let asset_id = issue_event.asset_id;
 			let asset_metadata_address = crate::asset_hub::storage().assets().metadata(&asset_id);
 			let asset_metadata = storage_api.fetch(&asset_metadata_address).await?;
+			let decimals =
+				if let Some(decimals) = asset_metadata.as_ref().map(|metadata| metadata.decimals) {
+					decimals
+				} else {
+					0
+				};
 			let asset = if let Some(name_bytes) = asset_metadata.map(|metadata| metadata.name) {
 				String::from_utf8(name_bytes.0).unwrap_or(format!("Asset id: {}", &asset_id))
 			} else {
@@ -161,16 +164,22 @@ async fn generate_xcm_received_payload(
 			};
 			(
 				asset,
-				issue_event.amount,
+				crate::helpers::to_decimal_f64(issue_event.amount, decimals),
 				crate::helpers::convert_account_id_to_ah_address(&issue_event.owner),
 				TransferType::Reserve,
 			)
 		},
-		(XcmAggregatedOrigin::Sibling(_), 2, Some(None), Some(None), Some(Some(issue_event))) => {
+		(XcmAggregatedOrigin::Sibling(_), Some(None), Some(None), Some(Some(issue_event))) => {
 			let asset_id = issue_event.asset_id;
 			let asset_metadata_address =
 				crate::asset_hub::storage().foreign_assets().metadata(&asset_id);
 			let asset_metadata = storage_api.fetch(&asset_metadata_address).await?;
+			let decimals =
+				if let Some(decimals) = asset_metadata.as_ref().map(|metadata| metadata.decimals) {
+					decimals
+				} else {
+					0
+				};
 			let asset = if let Some(name_bytes) = asset_metadata.map(|metadata| metadata.name) {
 				String::from_utf8(name_bytes.0)
 					.unwrap_or(format!("Asset location: {:?}", &asset_id))
@@ -193,7 +202,7 @@ async fn generate_xcm_received_payload(
 			};
 			(
 				asset,
-				issue_event.amount,
+				crate::helpers::to_decimal_f64(issue_event.amount, decimals),
 				crate::helpers::convert_account_id_to_ah_address(&issue_event.owner),
 				transfer_type,
 			)
@@ -218,31 +227,40 @@ mod tests {
 	use crate::asset_hub::runtime_types::polkadot_parachain_primitives::primitives::Id;
 
 	#[tokio::test]
-	async fn get_incoming_xcm_transfers_at_block_hash_with_reserve_transfer_received_from_sibling()
-	{
-		let api = OnlineClient::<PolkadotConfig>::from_url(crate::ASSET_HUB_RPC_ENDPOINT)
+	async fn get_incoming_xcm_transfers_at_block_hash_with_reserve_transfer() {
+		let api = OnlineClient::<PolkadotConfig>::from_url(crate::types::ASSET_HUB_RPC_ENDPOINT)
 			.await
 			.unwrap();
 
-    // Hydration ordered a transfer of USDT
-		let block_hash_hex = "0xdbbed8c97746c5fc0fc13e30aaf12cbbe329ecb4198ed0c0e62a32421016c11a";
+		// Hydration ordered a transfer of DOT and USDC
+		let block_hash_hex = "0x3ef4a4e3a4032c02343e335a4ed35f1ed4a78365c847b4f58c5e869d302add66";
 		let block_hash: BlockHash = block_hash_hex.parse().unwrap();
 		let xcm_transfer =
 			get_incoming_xcm_transfers_at_block_hash(&api, block_hash).await.unwrap();
 		assert_eq!(
 			xcm_transfer,
-			vec![XcmIncomingTransfer {
-				block_number: 8_886_424,
-				origin_chain: OriginChain(XcmAggregatedOrigin::Sibling(Id(2034))),
-				receiver: "148nLno8sWcZWVxXJjftB7Lbr6NmbhWPUZMCWQNcwnsGgyeb".to_owned(),
-				asset: "Tether USD".to_owned(),
-				amount: 869_282_849,
-				transfer_type: TransferType::Reserve
-			}]
+			vec![
+				XcmIncomingTransfer {
+					block_number: 8_900_358,
+					origin_chain: OriginChain(XcmAggregatedOrigin::Sibling(Id(2034))),
+					receiver: "15B8BaJCPi1HWY7Rty23t3PEUc9d36PGGBHSJ2Y4xzdwvaLK".to_owned(),
+					asset: "DOT".to_owned(),
+					amount: 7.5433009963,
+					transfer_type: TransferType::Reserve
+				},
+				XcmIncomingTransfer {
+					block_number: 8_900_358,
+					origin_chain: OriginChain(XcmAggregatedOrigin::Sibling(Id(2034))),
+					receiver: "12F62Gzyig1CpWEB9qaU7QkmRf4SmvnXJ3BER1poLxDoq12K".to_owned(),
+					asset: "USD Coin".to_owned(),
+					amount: 49.292041,
+					transfer_type: TransferType::Reserve
+				}
+			]
 		);
 
-    // Moonbeam ordered a transfer of USD Coin 
-    let block_hash_hex = "0x5e45bdca2951ac156e0459a461de60a1ee0a4263b17d7d6a95e4f28b9955c16b";
+		// Moonbeam ordered a transfer of USD Coin
+		let block_hash_hex = "0x5e45bdca2951ac156e0459a461de60a1ee0a4263b17d7d6a95e4f28b9955c16b";
 		let block_hash: BlockHash = block_hash_hex.parse().unwrap();
 		let xcm_transfer =
 			get_incoming_xcm_transfers_at_block_hash(&api, block_hash).await.unwrap();
@@ -253,14 +271,13 @@ mod tests {
 				origin_chain: OriginChain(XcmAggregatedOrigin::Sibling(Id(2004))),
 				receiver: "13KsaHFcQKSTd4m73Ub9yVwM1JGCZvipMyTZonHEXEceFYwS".to_owned(),
 				asset: "USD Coin".to_owned(),
-				amount: 9_401_612_723,
+				amount: 9_401.612723,
 				transfer_type: TransferType::Reserve
 			}]
 		);
 
-
-    // BridgeHub ordered a transfer of WETH
-    let block_hash_hex = "0x4bd6df2a92068d2cca88057e3263add68626bb563a8ff5c3435ad5478e6cc0e3";
+		// BridgeHub ordered a transfer of WETH
+		let block_hash_hex = "0x4bd6df2a92068d2cca88057e3263add68626bb563a8ff5c3435ad5478e6cc0e3";
 		let block_hash: BlockHash = block_hash_hex.parse().unwrap();
 		let xcm_transfer =
 			get_incoming_xcm_transfers_at_block_hash(&api, block_hash).await.unwrap();
@@ -271,9 +288,33 @@ mod tests {
 				origin_chain: OriginChain(XcmAggregatedOrigin::Sibling(Id(1002))),
 				receiver: "12aoZXwbUzsv3z5HF5HCrtEwBJYCeKne6rYsxFEKDZ86Wdv8".to_owned(),
 				asset: "Wrapped Ether".to_owned(),
-				amount: 100_000_000_000_000,
+				amount: 0.0001,
 				transfer_type: TransferType::Reserve
 			}]
+		);
+	}
+
+	#[tokio::test]
+	async fn get_incoming_xcm_transfers_at_block_hash_with_teleport() {
+		let api = OnlineClient::<PolkadotConfig>::from_url(crate::types::ASSET_HUB_RPC_ENDPOINT)
+			.await
+			.unwrap();
+
+		// The relaychain teleported DOT
+		let block_hash_hex = "0x64142906eb815d290cb6678de1cb5d00d011b1c4baa30eae779093cd02e1dde8";
+		let block_hash: BlockHash = block_hash_hex.parse().unwrap();
+		let xcm_transfer =
+			get_incoming_xcm_transfers_at_block_hash(&api, block_hash).await.unwrap();
+		assert_eq!(
+			xcm_transfer,
+			vec![XcmIncomingTransfer {
+				block_number: 8_901_175,
+				origin_chain: OriginChain(XcmAggregatedOrigin::Parent),
+				receiver: "13p9Fcn4eVJzHZL7Z6RXbRhEzjAYLU26BohYmy18yHXnMovT".to_owned(),
+				asset: "DOT".to_owned(),
+				amount: 8.8602977965,
+				transfer_type: TransferType::Teleport
+			},]
 		);
 	}
 }

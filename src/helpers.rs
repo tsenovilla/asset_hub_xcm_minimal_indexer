@@ -51,6 +51,11 @@ pub(crate) fn convert_account_id_to_ah_address(account_id: &AccountId32) -> Stri
 	Sr25519Public::from_raw(account_id.0).to_ss58check_with_version(Ss58AddressFormat::custom(0))
 }
 
+pub(crate) fn to_decimal_f64(value: u128, decimals: u8) -> f64 {
+	let factor = 10u128.pow(decimals as u32) as f64;
+	value as f64 / factor
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -62,7 +67,7 @@ mod tests {
 
 	#[tokio::test]
 	async fn validate_ah_metadata_with_ah_node() {
-		let api = OnlineClient::<PolkadotConfig>::from_url(crate::ASSET_HUB_RPC_ENDPOINT)
+		let api = OnlineClient::<PolkadotConfig>::from_url(crate::types::ASSET_HUB_RPC_ENDPOINT)
 			.await
 			.unwrap();
 		let metadata = api.metadata();
@@ -109,5 +114,12 @@ mod tests {
 		let address = "15oF4uVJwmo4TdGW7VfQxNLavjCXviqxT9S1MgbjMNHr6Sp5";
 		let account_id = AccountId32::from_str(address).unwrap();
 		assert_eq!(convert_account_id_to_ah_address(&account_id), address);
+	}
+
+	#[test]
+	fn to_decimal_f64_test() {
+		assert_eq!(to_decimal_f64(10_000_000_000_000, 18), 0.00001);
+		assert_eq!(to_decimal_f64(123_456_789, 6), 123.456789);
+		assert_eq!(to_decimal_f64(123, 0), 123f64);
 	}
 }
