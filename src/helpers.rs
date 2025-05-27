@@ -22,29 +22,32 @@ pub(crate) fn validate_ah_metadata(metadata: &Metadata) -> Result<(), Error> {
 	Ok(())
 }
 
-pub(crate) fn is_sibling_concrete_asset_for_message_origin(
-	origin: &XcmAggregatedOrigin,
-	asset_id: &Location,
-) -> bool {
+// An asset in AssetHub is only teleportable to a sibling parachain if it's a concrete asset for
+// that parachain. Only those kind of assets and DOT (with the relaychain) are teleportable in
+// AssetHub
+pub(crate) fn is_teleportable_to_sibling(asset_id: &Location, sibling_parachain_id: u32) -> bool {
 	fn junction_starts_with_para_id(para_id: u32, junction: &Junction) -> bool {
 		matches!(junction, Junction::Parachain(id) if *id==para_id)
 	}
 
-	if let XcmAggregatedOrigin::Sibling(para_id) = origin {
-		let para_id = para_id.0;
-		match (asset_id.parents, &asset_id.interior) {
-			(1, Junctions::X1(interior)) => junction_starts_with_para_id(para_id, &interior[0]),
-			(1, Junctions::X2(interior)) => junction_starts_with_para_id(para_id, &interior[0]),
-			(1, Junctions::X3(interior)) => junction_starts_with_para_id(para_id, &interior[0]),
-			(1, Junctions::X4(interior)) => junction_starts_with_para_id(para_id, &interior[0]),
-			(1, Junctions::X5(interior)) => junction_starts_with_para_id(para_id, &interior[0]),
-			(1, Junctions::X6(interior)) => junction_starts_with_para_id(para_id, &interior[0]),
-			(1, Junctions::X7(interior)) => junction_starts_with_para_id(para_id, &interior[0]),
-			(1, Junctions::X8(interior)) => junction_starts_with_para_id(para_id, &interior[0]),
-			_ => false,
-		}
-	} else {
-		false
+	match (asset_id.parents, &asset_id.interior) {
+		(1, Junctions::X1(interior)) =>
+			junction_starts_with_para_id(sibling_parachain_id, &interior[0]),
+		(1, Junctions::X2(interior)) =>
+			junction_starts_with_para_id(sibling_parachain_id, &interior[0]),
+		(1, Junctions::X3(interior)) =>
+			junction_starts_with_para_id(sibling_parachain_id, &interior[0]),
+		(1, Junctions::X4(interior)) =>
+			junction_starts_with_para_id(sibling_parachain_id, &interior[0]),
+		(1, Junctions::X5(interior)) =>
+			junction_starts_with_para_id(sibling_parachain_id, &interior[0]),
+		(1, Junctions::X6(interior)) =>
+			junction_starts_with_para_id(sibling_parachain_id, &interior[0]),
+		(1, Junctions::X7(interior)) =>
+			junction_starts_with_para_id(sibling_parachain_id, &interior[0]),
+		(1, Junctions::X8(interior)) =>
+			junction_starts_with_para_id(sibling_parachain_id, &interior[0]),
+		_ => false,
 	}
 }
 
@@ -104,7 +107,6 @@ pub(crate) fn to_decimal_f64(value: u128, decimals: u8) -> f64 {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::asset_hub::runtime_types::polkadot_parachain_primitives::primitives::Id;
 	use std::str::FromStr;
 	use subxt::{OnlineClient, PolkadotConfig};
 
@@ -127,7 +129,7 @@ mod tests {
 	}
 
 	#[test]
-	fn is_sibling_concrete_asset_for_message_origin_asset_test() {
+	fn is_teleportable_to_sibling_asset_test() {
 		let asset_id = Location {
 			parents: 1,
 			interior: Junctions::X3([
@@ -136,22 +138,8 @@ mod tests {
 				Junction::GeneralIndex(3014),
 			]),
 		};
-		assert!(is_sibling_concrete_asset_for_message_origin(
-			&XcmAggregatedOrigin::Sibling(Id(2004)),
-			&asset_id
-		));
-		assert!(!is_sibling_concrete_asset_for_message_origin(
-			&XcmAggregatedOrigin::Sibling(Id(3370)),
-			&asset_id
-		));
-		assert!(!is_sibling_concrete_asset_for_message_origin(
-			&XcmAggregatedOrigin::Parent,
-			&asset_id
-		));
-		assert!(!is_sibling_concrete_asset_for_message_origin(
-			&XcmAggregatedOrigin::Here,
-			&asset_id
-		));
+		assert!(is_teleportable_to_sibling(&asset_id, 2004));
+		assert!(!is_teleportable_to_sibling(&asset_id, 3370));
 	}
 
 	#[tokio::test]

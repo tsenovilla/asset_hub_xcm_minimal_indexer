@@ -159,7 +159,12 @@ async fn generate_xcm_received_payload(
 				TransferType::Reserve,
 			)
 		},
-		(XcmAggregatedOrigin::Sibling(_), Some(None), Some(None), Some(Some(issue_event))) => {
+		(
+			XcmAggregatedOrigin::Sibling(sibling_para_id),
+			Some(None),
+			Some(None),
+			Some(Some(issue_event)),
+		) => {
 			let asset_id = issue_event.asset_id;
 			let AssetMetadataValues { asset_name: asset, decimals } =
 				crate::helpers::extract_foreign_asset_metadata_values(&storage_api, &asset_id)
@@ -170,14 +175,12 @@ async fn generate_xcm_received_payload(
 			// may configure a runtime trusting AH as reserve for a teleportable asset, but this is
 			// pretty unlikely as there's not any advantage/attack opportunity by doing so. So while
 			// theoretically possible, let's discard this option for simplicity of the indexer).
-			let transfer_type = if crate::helpers::is_sibling_concrete_asset_for_message_origin(
-				&message_origin,
-				&asset_id,
-			) {
-				TransferType::Teleport
-			} else {
-				TransferType::Reserve
-			};
+			let transfer_type =
+				if crate::helpers::is_teleportable_to_sibling(&asset_id, sibling_para_id.0) {
+					TransferType::Teleport
+				} else {
+					TransferType::Reserve
+				};
 			(
 				asset,
 				crate::helpers::to_decimal_f64(issue_event.amount, decimals),
