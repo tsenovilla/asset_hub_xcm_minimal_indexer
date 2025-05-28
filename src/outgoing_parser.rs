@@ -174,56 +174,53 @@ async fn generate_xcm_sent_teleport_payload(
 	let mut output = vec![];
 	// Asset hub only allows teleports of DOT and foreign assets to its native chain, so it's enough
 	// considering those cases.
-	match *decoded_extrinsic.assets {
-		VersionedAssets::V3(assets) => {
-			for asset in assets.0 {
-				let asset_details = match (asset.id, asset.fun) {
-					(
-						AssetId::Concrete(MultiLocation { parents: 1, interior: Junctions::Here }),
-						Fungibility::Fungible(amount),
-					) => Some(("DOT".to_owned(), DOT_DECIMALS, amount)),
-					// To query foreign_asset storage we need to use V4 Locations, so we need to
-					// convert our V3 multilocation into a V4 Location. For simplicity, we only
-					// support native tokens of sibling parachains in this case (which is the
-					// most common tho, it's not usual to see an asset from other parachain's
-					// pallet_assets)
-					(
-						AssetId::Concrete(MultiLocation {
-							parents: 1,
-							interior: Junctions::X1(Junction::Parachain(para_id)),
-						}),
-						Fungibility::Fungible(amount),
-					) => {
-						let AssetMetadataValues { asset_name, decimals } =
-							crate::helpers::extract_foreign_asset_metadata_values(
-								storage_api,
-								&Location {
-									parents: 1,
-									interior: V4Junctions::X1([V4Junction::Parachain(para_id)]),
-								},
-							)
-							.await?;
-						Some((asset_name, decimals, amount))
-					},
-					// TODO: Add support for other Assets Ids
-					_ => None,
-				};
+	// TODO: Add support for other asset versions
+	if let VersionedAssets::V3(assets) = *decoded_extrinsic.assets {
+		for asset in assets.0 {
+			let asset_details = match (asset.id, asset.fun) {
+				(
+					AssetId::Concrete(MultiLocation { parents: 1, interior: Junctions::Here }),
+					Fungibility::Fungible(amount),
+				) => Some(("DOT".to_owned(), DOT_DECIMALS, amount)),
+				// To query foreign_asset storage we need to use V4 Locations, so we need to
+				// convert our V3 multilocation into a V4 Location. For simplicity, we only
+				// support native tokens of sibling parachains in this case (which is the
+				// most common tho, it's not usual to see an asset from other parachain's
+				// pallet_assets)
+				(
+					AssetId::Concrete(MultiLocation {
+						parents: 1,
+						interior: Junctions::X1(Junction::Parachain(para_id)),
+					}),
+					Fungibility::Fungible(amount),
+				) => {
+					let AssetMetadataValues { asset_name, decimals } =
+						crate::helpers::extract_foreign_asset_metadata_values(
+							storage_api,
+							&Location {
+								parents: 1,
+								interior: V4Junctions::X1([V4Junction::Parachain(para_id)]),
+							},
+						)
+						.await?;
+					Some((asset_name, decimals, amount))
+				},
+				// TODO: Add support for other Assets Ids
+				_ => None,
+			};
 
-				if let Some((asset_name, decimals, amount)) = asset_details {
-					output.push(XcmOutgoingTransfer {
-						block_number,
-						destination_chain: destination_chain.clone(),
-						sender: sender.clone(),
-						beneficiary: beneficiary.clone(),
-						asset: asset_name,
-						amount: crate::helpers::to_decimal_f64(amount, decimals),
-						transfer_type: TransferType::Teleport,
-					});
-				}
+			if let Some((asset_name, decimals, amount)) = asset_details {
+				output.push(XcmOutgoingTransfer {
+					block_number,
+					destination_chain: destination_chain.clone(),
+					sender: sender.clone(),
+					beneficiary: beneficiary.clone(),
+					asset: asset_name,
+					amount: crate::helpers::to_decimal_f64(amount, decimals),
+					transfer_type: TransferType::Teleport,
+				});
 			}
-		},
-		// TODO: Add support for other junctions
-		_ => (),
+		}
 	};
 	Ok(output)
 }
@@ -239,81 +236,78 @@ async fn generate_xcm_sent_reserve_transfer_payload(
 	);
 
 	let mut output = vec![];
-	match *decoded_extrinsic.assets {
-		VersionedAssets::V3(assets) => {
-			for asset in assets.0 {
-				let asset_details = match (asset.id, asset.fun) {
-					(
-						AssetId::Concrete(MultiLocation { parents: 1, interior: Junctions::Here }),
-						Fungibility::Fungible(amount),
-					) => Some(("DOT".to_owned(), DOT_DECIMALS, amount)),
-					// Pallet 50 is Assets, to recover the metadata, we cannot look for it as if it
-					// by location but using the AssetId. Pallet indexes cannot change without
-					// breaking the runtime, so it's OK to hardcode it here
-					(
-						AssetId::Concrete(MultiLocation {
-							parents: 0,
-							interior:
-								Junctions::X2(
-									Junction::PalletInstance(50),
-									Junction::GeneralIndex(asset_id),
-								),
-						}),
-						Fungibility::Fungible(amount),
-					) => {
-						let AssetMetadataValues { asset_name, decimals } =
-							crate::helpers::extract_asset_metadata_values(
-								storage_api,
-								//The GeneralIndex is u128, but this casting is safe due to it
-								// represent an asset_id in pallet_assets, which is exactly
-								// the casted type (otherwise the XCM wouldn't be valid).
-								&(asset_id
-									as crate::asset_hub::assets::storage::types::metadata::Param0),
-							)
-							.await?;
-						Some((asset_name, decimals, amount))
-					},
-					// To query foreign_asset storage we need to use V4 Locations, so we need to
-					// convert our V3 multilocation into a V4 Location. For simplicity, we only
-					// support native tokens of sibling parachains in this case (which is the
-					// most common tho, it's not usual to see an asset from other parachain's
-					// pallet_assets)
-					(
-						AssetId::Concrete(MultiLocation {
-							parents: 1,
-							interior: Junctions::X1(Junction::Parachain(para_id)),
-						}),
-						Fungibility::Fungible(amount),
-					) => {
-						let AssetMetadataValues { asset_name, decimals } =
-							crate::helpers::extract_foreign_asset_metadata_values(
-								storage_api,
-								&Location {
-									parents: 1,
-									interior: V4Junctions::X1([V4Junction::Parachain(para_id)]),
-								},
-							)
-							.await?;
-						Some((asset_name, decimals, amount))
-					},
-					// TODO: Add support for other Assets Ids
-					_ => None,
-				};
-				if let Some((asset_name, decimals, amount)) = asset_details {
-					output.push(XcmOutgoingTransfer {
-						block_number,
-						destination_chain: destination_chain.clone(),
-						sender: sender.clone(),
-						beneficiary: beneficiary.clone(),
-						asset: asset_name,
-						amount: crate::helpers::to_decimal_f64(amount, decimals),
-						transfer_type: TransferType::Reserve,
-					});
-				}
+	// TODO: Add support for other assets
+	if let VersionedAssets::V3(assets) = *decoded_extrinsic.assets {
+		for asset in assets.0 {
+			let asset_details = match (asset.id, asset.fun) {
+				(
+					AssetId::Concrete(MultiLocation { parents: 1, interior: Junctions::Here }),
+					Fungibility::Fungible(amount),
+				) => Some(("DOT".to_owned(), DOT_DECIMALS, amount)),
+				// Pallet 50 is Assets, to recover the metadata, we cannot look for it as if it
+				// by location but using the AssetId. Pallet indexes cannot change without
+				// breaking the runtime, so it's OK to hardcode it here
+				(
+					AssetId::Concrete(MultiLocation {
+						parents: 0,
+						interior:
+							Junctions::X2(
+								Junction::PalletInstance(50),
+								Junction::GeneralIndex(asset_id),
+							),
+					}),
+					Fungibility::Fungible(amount),
+				) => {
+					let AssetMetadataValues { asset_name, decimals } =
+						crate::helpers::extract_asset_metadata_values(
+							storage_api,
+							//The GeneralIndex is u128, but this casting is safe due to it
+							// represent an asset_id in pallet_assets, which is exactly
+							// the casted type (otherwise the XCM wouldn't be valid).
+							&(asset_id
+								as crate::asset_hub::assets::storage::types::metadata::Param0),
+						)
+						.await?;
+					Some((asset_name, decimals, amount))
+				},
+				// To query foreign_asset storage we need to use V4 Locations, so we need to
+				// convert our V3 multilocation into a V4 Location. For simplicity, we only
+				// support native tokens of sibling parachains in this case (which is the
+				// most common tho, it's not usual to see an asset from other parachain's
+				// pallet_assets)
+				(
+					AssetId::Concrete(MultiLocation {
+						parents: 1,
+						interior: Junctions::X1(Junction::Parachain(para_id)),
+					}),
+					Fungibility::Fungible(amount),
+				) => {
+					let AssetMetadataValues { asset_name, decimals } =
+						crate::helpers::extract_foreign_asset_metadata_values(
+							storage_api,
+							&Location {
+								parents: 1,
+								interior: V4Junctions::X1([V4Junction::Parachain(para_id)]),
+							},
+						)
+						.await?;
+					Some((asset_name, decimals, amount))
+				},
+				// TODO: Add support for other Assets Ids
+				_ => None,
+			};
+			if let Some((asset_name, decimals, amount)) = asset_details {
+				output.push(XcmOutgoingTransfer {
+					block_number,
+					destination_chain: destination_chain.clone(),
+					sender: sender.clone(),
+					beneficiary: beneficiary.clone(),
+					asset: asset_name,
+					amount: crate::helpers::to_decimal_f64(amount, decimals),
+					transfer_type: TransferType::Reserve,
+				});
 			}
-		},
-		// TODO: Add support for other junctions
-		_ => (),
+		}
 	};
 	Ok(output)
 }
@@ -329,108 +323,101 @@ async fn generate_xcm_sent_transfer_assets_payload(
 	);
 
 	let mut output = vec![];
-	match *decoded_extrinsic.assets {
-		VersionedAssets::V3(assets) => {
-			for asset in assets.0 {
-				let asset_details = match (asset.id, asset.fun) {
-					(
-						AssetId::Concrete(MultiLocation { parents: 1, interior: Junctions::Here }),
-						Fungibility::Fungible(amount),
-					) => Some((
-						"DOT".to_owned(),
-						DOT_DECIMALS,
-						amount,
-						if let DestinationChain::Polkadot = destination_chain {
-							true
+	// TODO: Add support for other assets
+	if let VersionedAssets::V3(assets) = *decoded_extrinsic.assets {
+		for asset in assets.0 {
+			let asset_details = match (asset.id, asset.fun) {
+				(
+					AssetId::Concrete(MultiLocation { parents: 1, interior: Junctions::Here }),
+					Fungibility::Fungible(amount),
+				) => Some((
+					"DOT".to_owned(),
+					DOT_DECIMALS,
+					amount,
+					matches!(destination_chain, DestinationChain::Polkadot),
+				)),
+				// Pallet 50 is Assets, to recover the metadata, we cannot look for it as if it
+				// were a foriegn asset. Pallet indexes cannot change without breaking the
+				// runtime, so it's OK to hardcode it here
+				(
+					AssetId::Concrete(MultiLocation {
+						parents: 0,
+						interior:
+							Junctions::X2(
+								Junction::PalletInstance(50),
+								Junction::GeneralIndex(asset_id),
+							),
+					}),
+					Fungibility::Fungible(amount),
+				) => {
+					let AssetMetadataValues { asset_name, decimals } =
+						crate::helpers::extract_asset_metadata_values(
+							storage_api,
+							//The GeneralIndex is u128, but this casting is safe due to it
+							// represent an asset_id in pallet_assets, which is exactly
+							// the casted type (otherwise the XCM wouldn't be valid).
+							&(asset_id
+								as crate::asset_hub::assets::storage::types::metadata::Param0),
+						)
+						.await?;
+					// These assets aren't teleportable
+					Some((asset_name, decimals, amount, false))
+				},
+				// To query foreign_asset storage we need to use V4 Locations, so we need to
+				// convert our V3 multilocation into a V4 Location. For simplicity, we only
+				// support native tokens of sibling parachains in this case (which is the
+				// most common tho, it's not usual to see an asset from other parachain's
+				// pallet_assets)
+				(
+					AssetId::Concrete(MultiLocation {
+						parents: 1,
+						interior: Junctions::X1(Junction::Parachain(para_id)),
+					}),
+					Fungibility::Fungible(amount),
+				) => {
+					let asset_location_in_v4 = Location {
+						parents: 1,
+						interior: V4Junctions::X1([V4Junction::Parachain(para_id)]),
+					};
+
+					let AssetMetadataValues { asset_name, decimals } =
+						crate::helpers::extract_foreign_asset_metadata_values(
+							storage_api,
+							&asset_location_in_v4,
+						)
+						.await?;
+					let is_teleportable =
+						if let DestinationChain::PolkadotParachain(sibling_parachain_id) =
+							destination_chain
+						{
+							crate::helpers::is_teleportable_to_sibling(
+								&asset_location_in_v4,
+								sibling_parachain_id,
+							)
 						} else {
 							false
-						},
-					)),
-					// Pallet 50 is Assets, to recover the metadata, we cannot look for it as if it
-					// were a foriegn asset. Pallet indexes cannot change without breaking the
-					// runtime, so it's OK to hardcode it here
-					(
-						AssetId::Concrete(MultiLocation {
-							parents: 0,
-							interior:
-								Junctions::X2(
-									Junction::PalletInstance(50),
-									Junction::GeneralIndex(asset_id),
-								),
-						}),
-						Fungibility::Fungible(amount),
-					) => {
-						let AssetMetadataValues { asset_name, decimals } =
-							crate::helpers::extract_asset_metadata_values(
-								storage_api,
-								//The GeneralIndex is u128, but this casting is safe due to it
-								// represent an asset_id in pallet_assets, which is exactly
-								// the casted type (otherwise the XCM wouldn't be valid).
-								&(asset_id
-									as crate::asset_hub::assets::storage::types::metadata::Param0),
-							)
-							.await?;
-						// These assets aren't teleportable
-						Some((asset_name, decimals, amount, false))
-					},
-					// To query foreign_asset storage we need to use V4 Locations, so we need to
-					// convert our V3 multilocation into a V4 Location. For simplicity, we only
-					// support native tokens of sibling parachains in this case (which is the
-					// most common tho, it's not usual to see an asset from other parachain's
-					// pallet_assets)
-					(
-						AssetId::Concrete(MultiLocation {
-							parents: 1,
-							interior: Junctions::X1(Junction::Parachain(para_id)),
-						}),
-						Fungibility::Fungible(amount),
-					) => {
-						let asset_location_in_v4 = Location {
-							parents: 1,
-							interior: V4Junctions::X1([V4Junction::Parachain(para_id)]),
 						};
-
-						let AssetMetadataValues { asset_name, decimals } =
-							crate::helpers::extract_foreign_asset_metadata_values(
-								storage_api,
-								&asset_location_in_v4,
-							)
-							.await?;
-						let is_teleportable =
-							if let DestinationChain::PolkadotParachain(sibling_parachain_id) =
-								destination_chain
-							{
-								crate::helpers::is_teleportable_to_sibling(
-									&asset_location_in_v4,
-									sibling_parachain_id,
-								)
-							} else {
-								false
-							};
-						Some((asset_name, decimals, amount, is_teleportable))
+					Some((asset_name, decimals, amount, is_teleportable))
+				},
+				// TODO: Add support for other Assets Ids
+				_ => None,
+			};
+			if let Some((asset_name, decimals, amount, is_teleportable)) = asset_details {
+				output.push(XcmOutgoingTransfer {
+					block_number,
+					destination_chain: destination_chain.clone(),
+					sender: sender.clone(),
+					beneficiary: beneficiary.clone(),
+					asset: asset_name,
+					amount: crate::helpers::to_decimal_f64(amount, decimals),
+					transfer_type: if is_teleportable {
+						TransferType::Teleport
+					} else {
+						TransferType::Reserve
 					},
-					// TODO: Add support for other Assets Ids
-					_ => None,
-				};
-				if let Some((asset_name, decimals, amount, is_teleportable)) = asset_details {
-					output.push(XcmOutgoingTransfer {
-						block_number,
-						destination_chain: destination_chain.clone(),
-						sender: sender.clone(),
-						beneficiary: beneficiary.clone(),
-						asset: asset_name,
-						amount: crate::helpers::to_decimal_f64(amount, decimals),
-						transfer_type: if is_teleportable {
-							TransferType::Teleport
-						} else {
-							TransferType::Reserve
-						},
-					});
-				}
+				});
 			}
-		},
-		// TODO: Add support for other junctions
-		_ => (),
+		}
 	};
 	Ok(output)
 }
