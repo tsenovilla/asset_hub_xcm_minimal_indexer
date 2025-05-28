@@ -16,7 +16,7 @@ pub(crate) struct XcmIncomingTransfer {
 	// This is currently u32, but better not assume it
 	block_number: BlockNumber,
 	origin_chain: OriginChain,
-	receiver: String,
+	beneficiary: String,
 	asset: String,
 	amount: f64,
 	transfer_type: TransferType,
@@ -174,11 +174,11 @@ async fn generate_xcm_received_payload(
 			// Any other combination isn't a valid Xcm transfer
 			_ => None,
 		};
-		if let Some((asset, amount, receiver, transfer_type)) = issuance_info {
+		if let Some((asset, amount, beneficiary, transfer_type)) = issuance_info {
 			received_assets.push(XcmIncomingTransfer {
 				block_number,
 				origin_chain: origin_chain.clone(),
-				receiver,
+				beneficiary,
 				asset,
 				amount,
 				transfer_type,
@@ -210,7 +210,7 @@ mod tests {
 				XcmIncomingTransfer {
 					block_number: 8_900_358,
 					origin_chain: OriginChain::PolkadotParachain(2034),
-					receiver: "15B8BaJCPi1HWY7Rty23t3PEUc9d36PGGBHSJ2Y4xzdwvaLK".to_owned(),
+					beneficiary: "15B8BaJCPi1HWY7Rty23t3PEUc9d36PGGBHSJ2Y4xzdwvaLK".to_owned(),
 					asset: "DOT".to_owned(),
 					amount: 7.5433009963,
 					transfer_type: TransferType::Reserve
@@ -218,7 +218,7 @@ mod tests {
 				XcmIncomingTransfer {
 					block_number: 8_900_358,
 					origin_chain: OriginChain::PolkadotParachain(2034),
-					receiver: "12F62Gzyig1CpWEB9qaU7QkmRf4SmvnXJ3BER1poLxDoq12K".to_owned(),
+					beneficiary: "12F62Gzyig1CpWEB9qaU7QkmRf4SmvnXJ3BER1poLxDoq12K".to_owned(),
 					asset: "USD Coin".to_owned(),
 					amount: 49.292041,
 					transfer_type: TransferType::Reserve
@@ -236,7 +236,7 @@ mod tests {
 			vec![XcmIncomingTransfer {
 				block_number: 8_898_884,
 				origin_chain: OriginChain::PolkadotParachain(2004),
-				receiver: "13KsaHFcQKSTd4m73Ub9yVwM1JGCZvipMyTZonHEXEceFYwS".to_owned(),
+				beneficiary: "13KsaHFcQKSTd4m73Ub9yVwM1JGCZvipMyTZonHEXEceFYwS".to_owned(),
 				asset: "USD Coin".to_owned(),
 				amount: 9_401.612723,
 				transfer_type: TransferType::Reserve
@@ -254,7 +254,7 @@ mod tests {
 				XcmIncomingTransfer {
 					block_number: 8898898,
 					origin_chain: OriginChain::PolkadotParachain(1002),
-					receiver: "12aoZXwbUzsv3z5HF5HCrtEwBJYCeKne6rYsxFEKDZ86Wdv8".to_owned(),
+					beneficiary: "12aoZXwbUzsv3z5HF5HCrtEwBJYCeKne6rYsxFEKDZ86Wdv8".to_owned(),
 					asset: "DOT".to_owned(),
 					amount: 0.0325895284,
 					transfer_type: TransferType::Reserve
@@ -262,7 +262,7 @@ mod tests {
 				XcmIncomingTransfer {
 					block_number: 8_898_898,
 					origin_chain: OriginChain::PolkadotParachain(1002),
-					receiver: "12aoZXwbUzsv3z5HF5HCrtEwBJYCeKne6rYsxFEKDZ86Wdv8".to_owned(),
+					beneficiary: "12aoZXwbUzsv3z5HF5HCrtEwBJYCeKne6rYsxFEKDZ86Wdv8".to_owned(),
 					asset: "Wrapped Ether".to_owned(),
 					amount: 0.0001,
 					transfer_type: TransferType::Reserve
@@ -287,7 +287,7 @@ mod tests {
 			vec![XcmIncomingTransfer {
 				block_number: 8_901_175,
 				origin_chain: OriginChain::Polkadot,
-				receiver: "13p9Fcn4eVJzHZL7Z6RXbRhEzjAYLU26BohYmy18yHXnMovT".to_owned(),
+				beneficiary: "13p9Fcn4eVJzHZL7Z6RXbRhEzjAYLU26BohYmy18yHXnMovT".to_owned(),
 				asset: "DOT".to_owned(),
 				amount: 8.8602977965,
 				transfer_type: TransferType::Teleport
