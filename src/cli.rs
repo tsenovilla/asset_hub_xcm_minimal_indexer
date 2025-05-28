@@ -1,6 +1,10 @@
 use crate::{Error, types::BlockHash};
 use clap::{Args, Command, Parser, Subcommand, error::ErrorKind};
-use std::{fs::File, io::Write, path::PathBuf};
+use std::{
+	fs::{self, File, OpenOptions},
+	io::Write,
+	path::PathBuf,
+};
 use subxt::{OnlineClient, PolkadotConfig};
 
 #[derive(Parser, Debug)]
@@ -44,6 +48,18 @@ impl CliCommand {
 			cmd.error(ErrorKind::ValueValidation, "The metadata used by the indexer is outdated. Run subxt metadata --url wss://polkadot-asset-hub-rpc.polkadot.io --output-file artifacts/ah_metadata.scale and recompile the project to continue. If the project fails to compile after updating the metadata, please reach out.").exit();
 		}
 
+		if let Some(path) = &self.output_file {
+			if let Some(parent) = path.parent() {
+				if let Err(e) = fs::create_dir_all(parent) {
+					cmd.error(ErrorKind::Io, format!("Failed to create output directory: {}", e))
+						.exit()
+				}
+			}
+			if let Err(e) = File::create(path) {
+				cmd.error(ErrorKind::Io, format!("Failed to create output file: {}", e)).exit()
+			}
+		}
+
 		match &self.mode {
 			Mode::GetTransfersAt(GetBlockAt { block_hash }) => {
 				let block_hash: BlockHash = if let Ok(hash) = block_hash.parse() {
@@ -62,20 +78,59 @@ impl CliCommand {
 				};
 
 				if let Some(path) = &self.output_file {
-					match File::create(path) {
-						Ok(mut file) =>
-							if let Err(e) = file.write_all(json.as_bytes()) {
-								cmd.error(ErrorKind::Io, format!("Failed to write to file: {}", e))
-									.exit()
-							},
-						Err(e) =>
-							cmd.error(ErrorKind::Io, format!("Failed to create file: {}", e)).exit(),
-					}
+					let mut file = if let Ok(file) =
+						OpenOptions::new().write(true).truncate(true).open(path)
+					{
+						file
+					} else {
+						cmd.error(ErrorKind::Io, "Failed to open output file").exit()
+					};
+					if let Err(e) = file.write_all(json.as_bytes()) {
+						cmd.error(ErrorKind::Io, format!("Failed to write to output file: {}", e))
+							.exit()
+					};
 				} else {
 					println!("{}", json);
 				}
 			},
-			_ => (),
+			Mode::SubscribeToNewTransfers => {
+				let mut stream = if let Ok(stream) = api.blocks().subscribe_finalized().await {
+					stream
+				} else {
+					cmd.error(ErrorKind::Io, "Failed to subscribe to finalized blocks").exit()
+				};
+
+				while let Some(Ok(block)) = stream.next().await {
+					let api = api.clone();
+					let path = self.output_file.clone();
+					let block_hash = block.hash();
+          println!("Received block {}", block_hash);
+
+					tokio::spawn(async move {
+						let transfers =
+							match crate::helpers::get_all_transfers_at_block_hash(&api, block_hash)
+								.await
+							{
+								Ok(transfers) if !transfers.is_empty() => transfers,
+								_ => return,
+							};
+
+						let json = match serde_json::to_string_pretty(&transfers) {
+							Ok(json) => json,
+							Err(_) => return,
+						};
+
+						if let Some(path) = path {
+							if let Ok(mut file) = OpenOptions::new().append(true).open(path) {
+								println!("xcm transfer found at block {}", block_hash);
+								let _ = writeln!(file, "{}", json);
+							}
+						} else {
+							println!("{}", json);
+						}
+					});
+				}
+			},
 		}
 		Ok(())
 	}
