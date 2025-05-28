@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - uses: "./.github/actions/init"
+      - name: Check
+        run: |
+          cargo check --release --tests
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - uses: "./.github/actions/init"
+      - name: Install nightly rustfmt
+        run: rustup toolchain install nightly --component rustfmt 
+      - name: Fmt
+        run: |
+          cargo +nightly fmt --all --check
+
+  clippy:
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - uses: "./.github/actions/init"
+      - name: Clippy
+        run: |
+          cargo clippy -- -D warnings
+
+  tests:
+    runs-on: ubuntu-latest
+    needs: [check, fmt]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - uses: "./.github/actions/init"
+      - name: Set sample files path env variable
+        run: echo "SAMPLE_FILES_PATH=$(pwd)/test_builder/sample_files" >> $GITHUB_ENV
+      - name: Run tests
+        run: |
+          cargo test
