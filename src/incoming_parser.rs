@@ -13,13 +13,12 @@ use subxt::{
 
 #[derive(Debug, Serialize, PartialEq)]
 pub(crate) struct XcmIncomingTransfer {
-	// This is currently u32, but better not assume it
-	block_number: BlockNumber,
-	origin_chain: OriginChain,
-	beneficiary: String,
-	asset: String,
-	amount: f64,
-	transfer_type: TransferType,
+	pub(crate) block_number: BlockNumber,
+	pub(crate) origin_chain: OriginChain,
+	pub(crate) beneficiary: String,
+	pub(crate) asset: String,
+	pub(crate) amount: f64,
+	pub(crate) transfer_type: TransferType,
 }
 
 #[derive(Debug, Serialize, Clone, PartialEq)]

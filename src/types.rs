@@ -26,3 +26,9 @@ pub(crate) type BlockHash =
 
 pub(crate) type BlockNumber =
 	<<PolkadotConfig as subxt::config::Config>::Header as subxt::config::Header>::Number;
+
+#[derive(Debug, Serialize, PartialEq)]
+pub(crate) enum XcmTransfer {
+	ReceivedTransfer(crate::incoming_parser::XcmIncomingTransfer),
+	SentTransfer(crate::outgoing_parser::XcmOutgoingTransfer),
+}

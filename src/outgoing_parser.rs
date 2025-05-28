@@ -29,14 +29,13 @@ use subxt::{
 
 #[derive(Debug, Serialize, PartialEq)]
 pub(crate) struct XcmOutgoingTransfer {
-	// This is currently u32, but better not assume it
-	block_number: BlockNumber,
-	destination_chain: DestinationChain,
-	sender: String,
-	beneficiary: String,
-	asset: String,
-	amount: f64,
-	transfer_type: TransferType,
+	pub(crate) block_number: BlockNumber,
+	pub(crate) destination_chain: DestinationChain,
+	pub(crate) sender: String,
+	pub(crate) beneficiary: String,
+	pub(crate) asset: String,
+	pub(crate) amount: f64,
+	pub(crate) transfer_type: TransferType,
 }
 
 // The types provided by the metadata aren't Serialize as they are intended to be serialized to
@@ -44,7 +43,7 @@ pub(crate) struct XcmOutgoingTransfer {
 // custom logic, but it will imply a huge amount of code. So for this small indexer we write a
 // small type that recognize some popular locations.
 #[derive(Debug, Serialize, PartialEq, Clone)]
-enum DestinationChain {
+pub(crate) enum DestinationChain {
 	Polkadot,
 	Kusama,
 	PolkadotParachain(u32),
