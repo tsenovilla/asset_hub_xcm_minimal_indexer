@@ -6,6 +6,6 @@ runs:
     - name: Toolchain
       uses: crusty-pie/toolchain@v1
     - name: Cache
-      uses: Swatinem/rust-cache@v2.7.3
+      uses: Swatinem/rust-cache@v2
       with:
         cache-on-failure: true 
