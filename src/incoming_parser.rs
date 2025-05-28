@@ -52,32 +52,29 @@ pub(crate) async fn get_incoming_xcm_transfers_at_block_hash(
 	let mut output = Vec::new();
 	let mut last_issuance_events = vec![];
 
-	for event in events {
-		// Don't block the indexer if the event is an error.
-		if let Ok(event) = event {
-			match (event.phase(), event.pallet_name(), event.variant_name()) {
-				(Phase::Finalization, "Assets", "Issued") |
-				(Phase::Finalization, "ForeignAssets", "Issued") => {
-					last_issuance_events.push(event);
-				},
-				(Phase::Finalization, "Balances", "Minted") => {
-					last_issuance_events.push(event);
-				},
-				(Phase::Finalization, "MessageQueue", "Processed") => {
-					if let Ok(payload) = generate_xcm_received_payload(
-						&storage,
-						block_number,
-						last_issuance_events,
-						event,
-					)
-					.await
-					{
-						output.extend(payload);
-					}
-					last_issuance_events = vec![];
-				},
-				_ => (),
-			}
+	for event in events.flatten() {
+		match (event.phase(), event.pallet_name(), event.variant_name()) {
+			(Phase::Finalization, "Assets", "Issued") |
+			(Phase::Finalization, "ForeignAssets", "Issued") => {
+				last_issuance_events.push(event);
+			},
+			(Phase::Finalization, "Balances", "Minted") => {
+				last_issuance_events.push(event);
+			},
+			(Phase::Finalization, "MessageQueue", "Processed") => {
+				if let Ok(payload) = generate_xcm_received_payload(
+					&storage,
+					block_number,
+					last_issuance_events,
+					event,
+				)
+				.await
+				{
+					output.extend(payload);
+				}
+				last_issuance_events = vec![];
+			},
+			_ => (),
 		}
 	}
 
@@ -141,7 +138,7 @@ async fn generate_xcm_received_payload(
 				let asset_id = issue_event.asset_id;
 
 				let AssetMetadataValues { asset_name: asset, decimals } =
-					crate::helpers::extract_asset_metadata_values(&storage_api, &asset_id).await?;
+					crate::helpers::extract_asset_metadata_values(storage_api, &asset_id).await?;
 				Some((
 					asset,
 					crate::helpers::to_decimal_f64(issue_event.amount, decimals),
@@ -152,7 +149,7 @@ async fn generate_xcm_received_payload(
 			(OriginChain::PolkadotParachain(sibling_para_id), None, None, Some(issue_event)) => {
 				let asset_id = issue_event.asset_id;
 				let AssetMetadataValues { asset_name: asset, decimals } =
-					crate::helpers::extract_foreign_asset_metadata_values(&storage_api, &asset_id)
+					crate::helpers::extract_foreign_asset_metadata_values(storage_api, &asset_id)
 						.await?;
 				// An asset in ForeignAsset may be transferred by teleport or reserve transfer.
 				// Check if the asset is teleportable, this is, if it's a sibling concrete asset
@@ -195,7 +192,6 @@ async fn generate_xcm_received_payload(
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::asset_hub::runtime_types::polkadot_parachain_primitives::primitives::Id;
 
 	#[tokio::test]
 	async fn get_incoming_xcm_transfers_at_block_hash_with_reserve_transfer() {

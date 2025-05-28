@@ -57,12 +57,7 @@ pub(crate) async fn extract_asset_metadata_values(
 ) -> Result<AssetMetadataValues, Error> {
 	let asset_metadata_address = crate::asset_hub::storage().assets().metadata(asset_id);
 	let asset_metadata = storage_api.fetch(&asset_metadata_address).await?;
-	let decimals = if let Some(decimals) = asset_metadata.as_ref().map(|metadata| metadata.decimals)
-	{
-		decimals
-	} else {
-		0
-	};
+	let decimals = asset_metadata.as_ref().map(|metadata| metadata.decimals).unwrap_or_default();
 	let asset_name = if let Some(name_bytes) = asset_metadata.map(|metadata| metadata.name) {
 		String::from_utf8(name_bytes.0).unwrap_or(format!("Asset id: {}", &asset_id))
 	} else {
@@ -77,12 +72,7 @@ pub(crate) async fn extract_foreign_asset_metadata_values(
 ) -> Result<AssetMetadataValues, Error> {
 	let asset_metadata_address = crate::asset_hub::storage().foreign_assets().metadata(asset_id);
 	let asset_metadata = storage_api.fetch(&asset_metadata_address).await?;
-	let decimals = if let Some(decimals) = asset_metadata.as_ref().map(|metadata| metadata.decimals)
-	{
-		decimals
-	} else {
-		0
-	};
+	let decimals = asset_metadata.as_ref().map(|metadata| metadata.decimals).unwrap_or_default();
 	let asset_name = if let Some(name_bytes) = asset_metadata.map(|metadata| metadata.name) {
 		String::from_utf8(name_bytes.0).unwrap_or(format!("Asset location: {:?}", &asset_id))
 	} else {

@@ -195,7 +195,7 @@ async fn generate_xcm_sent_teleport_payload(
 					) => {
 						let AssetMetadataValues { asset_name, decimals } =
 							crate::helpers::extract_foreign_asset_metadata_values(
-								&storage_api,
+								storage_api,
 								&Location {
 									parents: 1,
 									interior: V4Junctions::X1([V4Junction::Parachain(para_id)]),
@@ -262,7 +262,7 @@ async fn generate_xcm_sent_reserve_transfer_payload(
 					) => {
 						let AssetMetadataValues { asset_name, decimals } =
 							crate::helpers::extract_asset_metadata_values(
-								&storage_api,
+								storage_api,
 								//The GeneralIndex is u128, but this casting is safe due to it
 								// represent an asset_id in pallet_assets, which is exactly
 								// the casted type (otherwise the XCM wouldn't be valid).
@@ -286,7 +286,7 @@ async fn generate_xcm_sent_reserve_transfer_payload(
 					) => {
 						let AssetMetadataValues { asset_name, decimals } =
 							crate::helpers::extract_foreign_asset_metadata_values(
-								&storage_api,
+								storage_api,
 								&Location {
 									parents: 1,
 									interior: V4Junctions::X1([V4Junction::Parachain(para_id)]),
@@ -352,7 +352,7 @@ async fn generate_xcm_sent_transfer_assets_payload(
 					) => {
 						let AssetMetadataValues { asset_name, decimals } =
 							crate::helpers::extract_asset_metadata_values(
-								&storage_api,
+								storage_api,
 								//The GeneralIndex is u128, but this casting is safe due to it
 								// represent an asset_id in pallet_assets, which is exactly
 								// the casted type (otherwise the XCM wouldn't be valid).
@@ -382,7 +382,7 @@ async fn generate_xcm_sent_transfer_assets_payload(
 
 						let AssetMetadataValues { asset_name, decimals } =
 							crate::helpers::extract_foreign_asset_metadata_values(
-								&storage_api,
+								storage_api,
 								&asset_location_in_v4,
 							)
 							.await?;
