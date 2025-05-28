@@ -104,7 +104,7 @@ impl CliCommand {
 					let api = api.clone();
 					let path = self.output_file.clone();
 					let block_hash = block.hash();
-          println!("Received block {}", block_hash);
+					println!("Received block {}", block_hash);
 
 					tokio::spawn(async move {
 						let transfers =
